@@ -20,11 +20,11 @@ export default function ClinicTabsHeader({k_value, clinic_list, selected, onSele
   return (
     <Tabs
       defaultValue="roles"
-      className="w-full sticky top-0 bg-(--primary-bg-color) z-10 border-b border-[#C4C4C4] md:border-0 md:border-b-[1px] md:border-[var(--alto)]"
+      className="w-full sticky mt-2 top-0 bg-(--primary-bg-color) z-10 border-0"
     >
       <TabsList className="bg-(--primary-bg-color) flex flex-nowrap gap-2 overflow-x-auto">
         {sections.map((s) => (
-          <Link href={`/clinics/${k_value.City.toLowerCase()}/clinic/${s.id}`} className="text-xs text-white hover:text-gray-700 transition-colors">
+          <Link href={`/clinics/${k_value.City.toLowerCase()}/clinic/${s.id}`} className="text-xs text-black hover:text-gray-700 transition-colors">
        
           <div key={s.id} className=" bg-(--primary-bg-color) flex flex-colmin-w-max">
             
@@ -37,7 +37,7 @@ export default function ClinicTabsHeader({k_value, clinic_list, selected, onSele
                 });
                 onSelect?.(s.id)
               }}
-              className="bg-purple-100 text-sm font-medium text-white hover:text-primary transition-colors cursor-pointer"
+              className="bg-purple-100 text-sm font-medium text-black hover:text-black transition-colors cursor-pointer"
             >
               {s.label.split("-").map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ")}
             </TabsTrigger>
