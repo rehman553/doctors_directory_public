@@ -77,8 +77,18 @@ export interface Clinic {
   Fees: string	
   x_twitter: string
   Treatments?: string[]
-
-
+  claimed?: boolean
+  isConsentz?: boolean
+  aestheticsAwards?: Array<{ year: number; result: string; category: string }>
+  tatlerGuideYears?: number[]
+  awardsBadgeLabel?: string | null
+  tatlerBadgeLabel?: string | null
+  verified?: boolean
+  domainVerified?: boolean
+  gbpMatch?: boolean
+  gbpVerified?: boolean
+  idVerified?: boolean
+  manualVerified?: boolean
 }
 
 export interface RankingMeta {
@@ -104,8 +114,7 @@ export interface Practitioner extends Partial<Clinic> {
   Treatments?: string[]
   Title?:string
   Associated_Clinics?: string
-
-
+  licensed?: boolean
 }
 export interface ItemMeta {
   weighted_score: number
@@ -177,7 +186,8 @@ export interface SearchFilters {
   location: string
   rating: number
   services: string[]
-  
+  accreditation: string
+
 }
 export interface Product {
   // Identification
@@ -302,4 +312,12 @@ export interface Accreditation {
     question: string;
     answer: string;
   }>;
+}
+
+export interface PortalClinicSummary {
+  claimId: number;
+  clinicId: number;
+  slug: string;
+  name: string;
+  image: string | null;
 }

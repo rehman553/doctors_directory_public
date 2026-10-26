@@ -1,11 +1,12 @@
 import Link from "next/link";
-import { ArrowLeft, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardContent } from "@/components/ui/card";
-import type { Clinic, Practitioner } from "@/lib/types";
+import type { Practitioner } from "@/lib/types";
 import { getAccreditationImages } from "@/lib/utils";
-import clinicsJson from "@/../public/clinics_processed_new_data.json";
-import accreditationsJson from "@/../public/accreditations_processed_new.json";
+import { FallbackImage } from "@/components/ui/fallback-image";
+import { readJsonFileSync } from "@/lib/json-cache";
+import { getPractitionerDirectoryRobots } from "@/lib/practitioner-profile-robots";
+import { toDirectoryCanonical } from "@/lib/seo";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -14,58 +15,35 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
-import fs from "fs";
-import path from "path";
+import { getAllPractitionersForSearch } from "@/lib/data-access/practitioners";
+import { IconArrowNarrowLeft, IconUsers } from "@tabler/icons-react";
 
-const clinicsData = clinicsJson as unknown as Clinic[];
-const clinics = clinicsData
-  const clinicIndex = new Map(
-  clinics.filter(c=>c.slug !== undefined).map(c => [c.slug!, c])
-)
+export const dynamic = 'force-dynamic'
 
 export default async function ProfilePage() {
-  const filePath = path.join(process.cwd(), "public", "derms_processed_new_5403.json");
-  const fileContents = fs.readFileSync(filePath, "utf-8");
-  const practitionersData: Practitioner[] = JSON.parse(fileContents);
+  const [practitioners, accreditationsJson] = await Promise.all([
+    getAllPractitionersForSearch(),
+    Promise.resolve(readJsonFileSync('accreditations_processed_new.json')),
+  ])
   const recognitionsWithImages = getAccreditationImages(accreditationsJson);
-  
-  const practitioners = practitionersData
-    .map(p => {
-      const clinic = clinicIndex.get(JSON.parse(p.Associated_Clinics!)[0])
-      if (!clinic) return null
-      return {
-        ...clinic,
-        practitioner_name: p.practitioner_name,
-        practitioner_title: p.practitioner_title,
-        practitioner_qualifications: p.practitioner_qualifications,
-        practitioner_awards: p.practitioner_awards,
-      }
-    })
-    .filter((item) => item !== null).filter(Boolean)
 
   return (
-    <main className="bg-(--primary-bg-color)">
-      <div className="mx-auto max-w-6xl md:px-4 py-4 md:py-12">
+    <main className="bg-white">
+      <div className="mx-auto max-w-7xl md:px-4 py-4 md:py-12">
         <div className="flex flex-col pt-2 w-full pb-4 px-4 md:px-0 md:pt-0 md:border-0 border-b border-[#C4C4C4]">
           <div className="sticky top-0 z-10">
-            <Link className="mb-2 inline-block" href="/" prefetch={false}>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="gap-2 hover:cursor-pointer hover:bg-white hover:text-black"
-              >
-                <ArrowLeft className="h-4 w-4" />
+            <Link className="mb-4 inline-flex items-center gap-3 text-sm hover:underline" href="/" prefetch={false}>
+                <IconArrowNarrowLeft stroke={1.5} className="h-4 w-4" />
                 Back to Directory
-              </Button>
             </Link>
             <Breadcrumb>
               <BreadcrumbList>
                 <BreadcrumbItem>
-                  <BreadcrumbLink href="/directory">Home</BreadcrumbLink>
+                  <BreadcrumbLink href="/">Home</BreadcrumbLink>
                 </BreadcrumbItem>
                 <BreadcrumbSeparator />
                 <BreadcrumbItem>
-                  <BreadcrumbLink href="/directory/practitioners">Practitioners</BreadcrumbLink>
+                  <BreadcrumbLink href="/practitioners">Practitioners</BreadcrumbLink>
                 </BreadcrumbItem>
                 <BreadcrumbSeparator />
                 <BreadcrumbItem>
@@ -105,7 +83,7 @@ export default async function ProfilePage() {
                 className="gap-0 relative shadow-none group transition-all duration-300 border-b border-t-0 border-[#C4C4C4] md:border-0 md:border-(--alto) cursor-pointer hover:shadow-lg"
               >
                 <div className="relative w-full h-36 overflow-hidden rounded-t-md bg-white">
-                  <img
+                  <FallbackImage
                     src={credential.image_url}
                     alt={credential.name}
                     className="h-full w-full object-contain p-4"
@@ -124,7 +102,7 @@ export default async function ProfilePage() {
                   <div className="flex flex-col gap-3">
                     <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                       <span className="text-sm font-medium flex items-center gap-2">
-                        <Users className="h-4 w-4" />
+                        <IconUsers stroke={1.5} className="h-4 w-4" />
                         {practitionerCount} Practitioner{practitionerCount !== 1 ? 's' : ''}
                       </span>
                       <Link href={`/practitioners/credentials/${encodeURIComponent(credential.name.toLowerCase())}`}>
@@ -145,12 +123,17 @@ export default async function ProfilePage() {
 }
 
 export async function generateMetadata() {
+  const robots = getPractitionerDirectoryRobots();
   return {
     title: 'Credentialed Practitioners - Healthcare Directory',
     description: 'Find healthcare practitioners by professional credentials and qualifications. Browse medical degrees, certifications, and specializations. Compare ratings, reviews, and book appointments.',
+    alternates: {
+      canonical: toDirectoryCanonical('/practitioners/credentials'),
+    },
     openGraph: {
       title: 'Credentialed Practitioners - Healthcare Directory',
       description: 'Find healthcare practitioners by professional credentials and qualifications.',
-    }
+    },
+    ...(robots ? { robots } : {}),
   }
 }

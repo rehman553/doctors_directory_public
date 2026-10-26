@@ -1,0 +1,129 @@
+'use client'
+
+import { useRef, useState } from 'react'
+import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
+import { IconUpload, IconX } from '@tabler/icons-react'
+
+interface Props {
+  value: string | null
+  onChange: (url: string | null) => void
+  shape?: 'square' | 'circle'
+  className?: string
+  endpoint?: string
+}
+
+export function ImageUpload({
+  value,
+  onChange,
+  shape = 'square',
+  className,
+  endpoint = '/directory/api/admin/upload/',
+}: Readonly<Props>) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [uploading, setUploading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleFile(file: File) {
+    setError(null)
+    setUploading(true)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const res = await fetch(endpoint, { method: 'POST', body: form })
+      const data = await res.json()
+      if (!res.ok) {
+        setError(data.error ?? 'Upload failed')
+        return
+      }
+      onChange(data.url)
+    } catch {
+      setError('Network error — upload failed')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (file) handleFile(file)
+    e.target.value = ''
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault()
+    const file = e.dataTransfer.files[0]
+    if (file) handleFile(file)
+  }
+
+  return (
+    <div className={cn('flex flex-col gap-2', className)}>
+      <div className="flex gap-3 items-start">
+        {/* Preview */}
+        {value ? (
+          <div className="relative shrink-0">
+            <img
+              key={value}
+              src={value}
+              alt=""
+              className={cn(
+                'object-cover border border-gray-200 bg-gray-100',
+                shape === 'circle' ? 'w-12 h-12 rounded-full' : 'w-12 h-12 rounded-lg'
+              )}
+            />
+            <button
+              type="button"
+              onClick={() => onChange(null)}
+              className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-gray-700 flex items-center justify-center hover:bg-red-600 hover:cursor-pointer transition-colors"
+              aria-label="Remove image"
+            >
+              <IconX stroke={1.5} className="h-2.5 w-2.5 stroke-white" />
+            </button>
+          </div>
+        ) : (
+          <div
+            className={cn(
+              'shrink-0 w-12 h-12 border-2 border-dashed border-[#e0e0e0]  flex items-center justify-center text-gray-600',
+              shape === 'circle' ? 'rounded-full' : 'rounded-lg'
+            )}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={handleDrop}
+          >
+            <IconUpload stroke={1.5} className="h-4 w-4" />
+          </div>
+        )}
+
+        {/* URL input */}
+        <Input
+          value={value ?? ''}
+          onChange={(e) => onChange(e.target.value || null)}
+          placeholder="https://… or upload a file"
+          className="flex-1"
+        />
+
+        {/* Upload button */}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={uploading}
+          onClick={() => inputRef.current?.click()}
+          className="shrink-0"
+        >
+          {uploading ? 'Uploading…' : 'Upload'}
+        </Button>
+      </div>
+
+      {error && <p className="text-xs text-destructive">{error}</p>}
+
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp,image/gif,image/svg+xml"
+        className="hidden"
+        onChange={handleInputChange}
+      />
+    </div>
+  )
+}

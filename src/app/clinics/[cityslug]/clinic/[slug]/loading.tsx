@@ -1,5 +1,4 @@
 import { Button } from "@/components/ui/button";
-import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import ClinicTabs from "@/components/Clinic/clinicTabs";
 import { 
@@ -10,25 +9,26 @@ import {
   BreadcrumbSkeleton
 } from "@/components/loading-skeleton";
 import { Skeleton } from "@/components/ui/skeleton";
+import { IconArrowNarrowLeft } from "@tabler/icons-react";
 
 export default async function Loading({ params }: { params: { cityslug: string; slug: string } }) {
 
   return (
     <main className="min-h-screen bg-background">
       <div className="bg-card/50 backdrop-blur-sm sticky top-0 z-10">
-        <div className="container mx-auto max-w-6xl px-4 py-4">
-          <Link className="mb-2 inline-block" href="/" prefetch={false}>
+        <div className="container mx-auto max-w-7xl px-4 py-4">
+          <Link className="mb-3 inline-block" href="/" prefetch={false}>
             <Button
               variant="ghost"
               size="sm"
               className="gap-2 hover:cursor-pointer hover:bg-white hover:text-black"
             >
-              <ArrowLeft className="h-4 w-4" />
+              <IconArrowNarrowLeft stroke={1.5} className="h-4 w-4" />
               Back to Directory
             </Button>
           </Link>
         </div>
-        <div className="container mx-auto max-w-6xl px-4 py-2">
+        <div className="container mx-auto max-w-7xl px-4 py-2">
           <BreadcrumbSkeleton
             items={[
               { label: "Home", href: "/" },
@@ -38,7 +38,7 @@ export default async function Loading({ params }: { params: { cityslug: string; 
         </div>
       </div>
 
-      <div className="container mx-auto max-w-6xl pt-0 md:px-4 py-20 space-y-8">
+      <div className="container mx-auto max-w-7xl pt-0 md:px-4 py-20 space-y-8">
         <ProfileHeaderSkeleton />
 
         <div className="px-4 md:px-0">

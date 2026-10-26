@@ -1,11 +1,10 @@
-import { notFound } from "next/navigation";
+
+import { notFound, permanentRedirect, redirect } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ProfileHeader } from "@/components/Product/profile-header";
 import ClinicDetailsMarkdown from "@/components/Product/ProductDetailsMD";
 import { Product } from "@/lib/types";
-import fs from "fs";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -13,82 +12,78 @@ import {
   BreadcrumbList,
   BreadcrumbPage,
   BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb"
-import path from "path";
+} from "@/components/ui/breadcrumb";
 import PractitionerTabs from "@/components/Product/ProductTabs";
-import ItemsGrid from "@/components/collectionGrid";
-import productsJSON from "@/../public/products_processed_new.json";
-import { MoreItems } from "@/components/MoreItems";
-import { locations } from "@/lib/data";
-import clinicsJSON from "@/../public/clinics_processed_new_data.json";
-import { Clinic } from "@/lib/types";
+import { toUrlSlug } from "@/lib/utils";
+import { Suspense } from "react";
+import { getProductBySlug } from "@/lib/data-access/products";
+import { isRedirectedCategorySlug, isRemovedProductSlug } from "@/lib/product-removals";
+import { toDirectoryCanonical } from "@/lib/seo";
+import { IconArrowNarrowLeft } from "@tabler/icons-react";
+const SimilarProducts = (await import("./SimilarProducts")).default;
+const UniqueTreatments = (await import("./UniqueTreatments")).default;
+const Locations = (await import("./Locations")).default;
 
 interface ProfilePageProps {
   params: {
+    category: string;
     slug: string;
   };
 }
 
+
 export default async function ProfilePage({ params }: Readonly<ProfilePageProps>) {
-  const clinics = productsJSON as unknown as Product[];
-  const { slug } = params;
-  console.log(slug)
-  const clinic = clinics.find((p) => p.slug === slug);
+  const { slug, category } = params;
 
-  const similarProducts = clinics.filter((p) => p.category === clinic?.category && p.slug !== slug);
+  if (isRemovedProductSlug(slug)) {
+    notFound();
+  }
 
-  const allClinics = clinicsJSON as unknown as Clinic[];
-  const uniqueTreatments = [
-    ...new Set(
-      allClinics
-        .filter(c => Array.isArray(c.Treatments))
-        .flatMap(c => c.Treatments).filter((t): t is string => typeof t === "string")
-    )
-  ];
-  
-
+  const clinic = await getProductBySlug(slug);
   if (!clinic) {
     notFound();
+  }
+
+  if (isRedirectedCategorySlug(slug) && clinic.brand) {
+    permanentRedirect(`/products/brands/${toUrlSlug(clinic.brand)}/${slug}`);
+  }
+
+  // Redirect if category URL segment is not in lowercase-slug form
+  const expectedCategorySlug = toUrlSlug(clinic.category);
+  if (category !== expectedCategorySlug) {
+    redirect(`/products/category/${expectedCategorySlug}/${slug}`);
   }
 
   return (
     <main className="min-h-screen bg-background">
       {/* Navigation */}
       <div className="sticky top-0 z-10">
-        <div className="container mx-auto max-w-6xl px-4 py-4">
-          <Link href="/" prefetch={false}>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="gap-2 hover:cursor-pointer hover:bg-white hover:text-black"
-            >
-              <ArrowLeft className="h-4 w-4" />
+        <div className="container mx-auto max-w-7xl px-4 py-4">
+          <Link href="/" prefetch={false} className="mb-4 inline-flex items-center gap-3 text-sm hover:underline">
+              <IconArrowNarrowLeft stroke={1.5} className="h-4 w-4" />
               Back to Directory
-            </Button>
           </Link>
-        </div>
-        <div className="container mx-auto max-w-6xl px-4 py-2">
           <Breadcrumb>
           <BreadcrumbList>
             <BreadcrumbItem>
-              <BreadcrumbLink href="/directory">Home</BreadcrumbLink>
+              <BreadcrumbLink href="/">Home</BreadcrumbLink>
             </BreadcrumbItem>
             <BreadcrumbSeparator />
             <BreadcrumbItem>
-              <BreadcrumbLink href="/directory/products">
+              <BreadcrumbLink href="/products">
                 Products
               </BreadcrumbLink>
             </BreadcrumbItem>
             <BreadcrumbSeparator />
             <BreadcrumbItem>
-              <BreadcrumbLink href={`/directory/products/category`}>
+              <BreadcrumbLink href={`/products/category`}>
                 Categories
               </BreadcrumbLink>
             </BreadcrumbItem>
             <BreadcrumbSeparator />
             <BreadcrumbItem>
               <BreadcrumbLink
-                href={`/directory/products/category/${clinic.category}`}
+                href={`/products/category/${toUrlSlug(clinic.category)}`}
               >{`${clinic.category}`}</BreadcrumbLink>
             </BreadcrumbItem>
             <BreadcrumbSeparator />
@@ -100,7 +95,7 @@ export default async function ProfilePage({ params }: Readonly<ProfilePageProps>
         </div>
       </div>
 
-      <div className="container mx-auto max-w-6xl pt-0 md:px-4 py-20 space-y-8">
+      <div className="container mx-auto max-w-7xl pt-0 md:px-4 py-20 space-y-8">
         {/* Profile Header */}
         <ProfileHeader clinic={clinic} />
 
@@ -112,14 +107,21 @@ export default async function ProfilePage({ params }: Readonly<ProfilePageProps>
               <ClinicDetailsMarkdown clinic={clinic} />
             </div>
           </div>
+          <h2 className="text-lg font-semibold text-foreground mb-2">{`Browse more ${clinic.product_category}`}</h2>
+        
         </div>
-        <h2 className="text-lg font-semibold text-foreground mb-2">{`Browse more ${clinic.product_category}`}</h2>
-        <ItemsGrid items={similarProducts} />
+        <Suspense fallback={<div className="h-32 bg-muted animate-pulse rounded mb-4" />}> 
+          <SimilarProducts category={clinic.category} slug={clinic.slug} />
+        </Suspense>
         <div className="px-4 md:px-0 space-y-6">
           <h3 className="text-lg font-semibold text-foreground mb-2">{`Top Treatments`}</h3>
-          <MoreItems items={uniqueTreatments} />
+          <Suspense fallback={<div className="h-24 bg-muted animate-pulse rounded mb-2" />}> 
+            <UniqueTreatments />
+          </Suspense>
           <h3 className="text-lg font-semibold text-foreground mb-2">{`Top Cities in the UK`}</h3>
-          <MoreItems items={locations} />
+          <Suspense fallback={<div className="h-24 bg-muted animate-pulse rounded mb-2" />}> 
+            <Locations />
+          </Suspense>
         </div>
       </div>
     </main>
@@ -137,31 +139,40 @@ export default async function ProfilePage({ params }: Readonly<ProfilePageProps>
 // }
 
 export async function generateMetadata({ params }: ProfilePageProps) {
-  const filePath = path.join(process.cwd(), "public", "products_processed_new.json");
-  const fileContents = fs.readFileSync(filePath, "utf-8");
-  const clinics: Product[] = JSON.parse(fileContents);
-  const clinic = clinics.find((p) => p.slug === params.slug);
+  const clinic = await getProductBySlug(params.slug);
+  const canonicalCategory = decodeURIComponent(params.category).toLowerCase();
+  const canonicalSlug = decodeURIComponent(params.slug).toLowerCase();
+  const canonicalUrl = toDirectoryCanonical(
+    `/products/category/${canonicalCategory}/${canonicalSlug}`
+  );
 
-  if (!clinic) {
+  if (isRemovedProductSlug(params.slug) || !clinic) {
     return {
-      title: "Practitioner Not Found",
+      title: "Product Not Found",
+      alternates: {
+        canonical: canonicalUrl,
+      },
     };
   }
 
-  const clinicName = clinic.slug;
+  const productName = clinic.product_name ?? clinic.slug.replaceAll("-", " ");
+  const category = clinic.product_category ?? clinic.category ?? "Aesthetic";
 
   return {
-    title: `${clinicName.replaceAll("-", " ")}`,
-    description: `View ${clinicName}, a product of ${clinic.brand} in the ${clinic.product_category} segment.`,
+    title: `${productName} - Buy ${category} for Aesthetic Clinics`,
+    description: `Compare ${productName} prices from verified UK suppliers. Trusted by aesthetic & medical clinics. Browse the Consentz directory today.`,
+    alternates: {
+      canonical: canonicalUrl,
+    },
     openGraph: {
-      title: `${clinicName} - Consentz`,
-      description: `View ${clinicName}, a product of ${clinic.brand} in the ${clinic.product_category} segment.`,
+      title: `${productName} - Buy ${category} for Aesthetic Clinics`,
+      description: `Compare ${productName} prices from verified UK suppliers. Trusted by aesthetic & medical clinics. Browse the Consentz directory today.`,
       images: [
         {
           url: clinic.image_url || "/og-image.png",
           width: 1200,
           height: 630,
-          alt: `${clinicName} profile picture`,
+          alt: `${productName} product image`,
         },
       ],
     },

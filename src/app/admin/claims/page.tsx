@@ -1,0 +1,539 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+import { toast } from 'sonner'
+import { AdminLayout, useAdminCounts } from '@/components/admin/AdminLayout'
+import { DataTable } from '@/components/admin/DataTable'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog'
+import { Textarea } from '@/components/ui/textarea'
+import { Label } from '@/components/ui/label'
+import { PPL_LEAD_PRICE, SUBSCRIPTION_MONTHLY_PRICE } from '@/lib/pricing'
+
+export const dynamic = 'force-dynamic'
+
+const STATUS_COLORS: Record<string, string> = {
+  pending_otp: 'bg-gray-100 text-gray-700',
+  otp_verified: 'bg-blue-100 text-blue-700',
+  pending_approval: 'bg-amber-100 text-amber-800',
+  approved: 'bg-emerald-100 text-emerald-800',
+  rejected: 'bg-red-100 text-red-700',
+}
+
+const STATUS_LABELS: Record<string, string> = {
+  pending_otp: 'Awaiting OTP',
+  otp_verified: 'OTP Verified',
+  pending_approval: 'Pending Review',
+  approved: 'Approved',
+  rejected: 'Rejected',
+}
+
+const PLAN_LABELS: Record<string, string> = {
+  free: 'Free',
+  pay_per_lead: `Pay-Per-Lead £${PPL_LEAD_PRICE}`,
+  subscription: `Subscription £${SUBSCRIPTION_MONTHLY_PRICE}`,
+}
+
+const columns = [
+  {
+    key: 'entityType',
+    label: 'Type',
+    render: (value: string) => (
+      <Badge variant={value === 'practitioner' ? 'secondary' : 'outline'} className="text-xs capitalize">
+        {value}
+      </Badge>
+    ),
+  },
+  {
+    key: 'isNewRegistration',
+    label: 'Source',
+    render: (value: boolean) => (
+      <Badge variant={value ? 'default' : 'outline'} className="text-xs">
+        {value ? 'New listing' : 'Claim'}
+      </Badge>
+    ),
+  },
+  {
+    key: 'entityName',
+    label: 'Profile',
+    render: (value: string, row: Claim) =>
+      row.profileUrl ? (
+        <a
+          href={row.profileUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="text-black hover:underline"
+        >
+          {value} ↗
+        </a>
+      ) : (
+        value
+      ),
+  },
+  { key: 'claimerName', label: 'Claimer' },
+  { key: 'claimerEmail', label: 'Email' },
+  {
+    key: 'selectedPlan',
+    label: 'Plan',
+    render: (value: string) => value ? PLAN_LABELS[value] ?? value : '—',
+  },
+  {
+    key: 'requiresManualReview',
+    label: 'Manual',
+    render: (value: boolean) =>
+      value
+        ? <Badge variant="destructive" className="text-xs">Yes</Badge>
+        : <span className="text-muted-foreground text-xs">No</span>,
+  },
+  {
+    key: 'status',
+    label: 'Status',
+    render: (value: string) => (
+      <Badge
+        variant="outline"
+        className={`font-medium border-transparent ${STATUS_COLORS[value] ?? 'bg-gray-100 text-gray-600'}`}
+      >
+        {STATUS_LABELS[value] ?? value}
+      </Badge>
+    ),
+  },
+  {
+    key: 'createdAt',
+    label: 'Submitted',
+    render: (value: string) =>
+      value ? new Date(value).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—',
+  },
+]
+
+interface NewListingData {
+  clinicNameInput?: string
+  fullName?: string
+  address?: string
+  city?: string
+  category?: string
+  profession?: string
+  about?: string
+}
+
+interface Claim {
+  id: number
+  entityType: 'clinic' | 'practitioner'
+  entityName: string
+  isNewRegistration: boolean
+  newListingData: string | null
+  clinicSlug: string | null
+  practitionerSlug: string | null
+  profileUrl: string | null
+  claimerName: string
+  claimerEmail: string
+  clinicNameInput: string | null
+  clinicPhone: string | null
+  clinicWebsite: string | null
+  googleBusinessLink: string | null
+  profession: string | null
+  licenseNumber: string | null
+  registryName: string | null
+  domainVerified: boolean
+  affiliated: boolean
+  requiresManualReview: boolean
+  selectedPlan: string | null
+  status: string
+  adminNotes: string | null
+  createdAt: string
+  consentzUserId: number | null
+  clinic: { name: string | null; gmapsAddress: string | null; category: string | null } | null
+  practitioner: { displayName: string | null; specialty: string | null } | null
+}
+
+export default function AdminClaimsPage() {
+  const { refreshCounts } = useAdminCounts()
+  const [claims, setClaims] = useState<Claim[]>([])
+  const [loading, setLoading] = useState(true)
+  const [filter, setFilter] = useState('pending_approval')
+  const [reviewClaim, setReviewClaim] = useState<Claim | null>(null)
+  const [adminNotes, setAdminNotes] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [markingPaid, setMarkingPaid] = useState<number | null>(null)
+  const [reprovisioning, setReprovisioning] = useState<number | null>(null)
+
+  function fetchClaims(status?: string) {
+    setLoading(true)
+    const qs = status && status !== 'all' ? `?status=${status}` : ''
+    fetch(`/directory/api/admin/claims/${qs}`, { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((data: Claim[]) => {
+        if (!Array.isArray(data)) { setClaims([]); setLoading(false); return }
+        const rows = data.map((c) => {
+          if (c.isNewRegistration) {
+            const listing: NewListingData = c.newListingData ? JSON.parse(c.newListingData) : {}
+            return {
+              ...c,
+              entityName:
+                c.entityType === 'practitioner'
+                  ? (c.practitioner?.displayName ?? listing.fullName ?? c.claimerName ?? '—')
+                  : (c.clinic?.name ?? listing.clinicNameInput ?? c.clinicNameInput ?? '—'),
+            }
+          }
+          return {
+            ...c,
+            entityName:
+              c.entityType === 'practitioner'
+                ? (c.practitioner?.displayName ?? c.practitionerSlug ?? '—')
+                : (c.clinic?.name ?? c.clinicSlug ?? '—'),
+          }
+        })
+        setClaims(rows)
+        setLoading(false)
+      })
+      .catch(() => setLoading(false))
+  }
+
+  useEffect(() => { fetchClaims(filter) }, [filter])
+
+  async function handleMarkPaid(claim: Claim) {
+    setMarkingPaid(claim.id)
+    try {
+      const res = await fetch(`/directory/api/admin/claims/${claim.id}/`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'mark_paid' }),
+      })
+      if (!res.ok) throw new Error()
+      toast.success('Claim moved to Pending Review')
+      fetchClaims(filter)
+    } catch {
+      toast.error('Failed to update claim')
+    } finally {
+      setMarkingPaid(null)
+    }
+  }
+
+  async function handleReprovision(claim: Claim) {
+    setReprovisioning(claim.id)
+    try {
+      const res = await fetch(`/directory/api/admin/claims/${claim.id}/`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'reprovision' }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error()
+      if (data.provisioningFailed) {
+        toast.error('Reprovisioning still failed — your Consentz session may have expired. Log out, log back in, then try Reprovision again.')
+      } else {
+        toast.success('Consentz account provisioned — welcome email sent')
+      }
+      fetchClaims(filter)
+    } catch {
+      toast.error('Reprovisioning failed — check server logs')
+    } finally {
+      setReprovisioning(null)
+    }
+  }
+
+  async function handleReview(action: 'approve' | 'reject') {
+    if (!reviewClaim) return
+    setSubmitting(true)
+    try {
+      const res = await fetch(`/directory/api/admin/claims/${reviewClaim.id}/`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, adminNotes }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error ?? 'Failed to update claim')
+      if (data.alreadyApproved) {
+        toast.info('Claim was already approved — use Reprovision if Consentz account is missing')
+      } else if (data.provisioningFailed) {
+        toast.error('Claim approved, but Consentz account setup failed (likely an expired admin session) — no email was sent to the clinic. Log out, log back in, then use Reprovision to finish setup.')
+      } else {
+        toast.success(action === 'approve' ? 'Claim approved' : 'Claim rejected')
+      }
+      setClaims((prev) => prev.filter((c) => c.id !== reviewClaim.id))
+      refreshCounts()
+      setReviewClaim(null)
+      setAdminNotes('')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update claim')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const filterTabs = [
+    { value: 'pending_approval', label: 'Pending Review' },
+    { value: 'approved', label: 'Approved' },
+    { value: 'rejected', label: 'Rejected' },
+    { value: 'all', label: 'All' },
+  ]
+
+  return (
+    <AdminLayout title="Claim Requests">
+      <div className="space-y-4">
+        <h1 className="text-2xl font-medium">Claim Requests</h1>
+
+        <div className="flex gap-2">
+          {filterTabs.map((tab) => (
+            <button
+              key={tab.value}
+              onClick={() => setFilter(tab.value)}
+              className={[
+                'px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
+                filter === tab.value
+                  ? 'bg-foreground text-background'
+                  : 'bg-muted text-muted-foreground hover:text-foreground',
+              ].join(' ')}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        <DataTable
+          columns={[
+            ...columns,
+            {
+              key: 'id',
+              label: '',
+              render: (_: unknown, row: Claim) => {
+                if (row.status === 'otp_verified' && row.selectedPlan && row.selectedPlan !== 'free') {
+                  return (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleMarkPaid(row) }}
+                      disabled={markingPaid === row.id}
+                      className="px-2 py-1 text-xs rounded-lg bg-gray-900 text-white hover:bg-gray-700 font-medium disabled:opacity-50"
+                    >
+                      {markingPaid === row.id ? 'Updating…' : 'Mark as Paid'}
+                    </button>
+                  )
+                }
+                if (row.status === 'approved' && !row.consentzUserId) {
+                  return (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleReprovision(row) }}
+                      disabled={reprovisioning === row.id}
+                      className="px-2 py-1 text-xs rounded-lg border border-[#e0e0e0]  text-gray-700 hover:bg-gray-50 font-medium disabled:opacity-50"
+                    >
+                      {reprovisioning === row.id ? 'Provisioning…' : 'Reprovision'}
+                    </button>
+                  )
+                }
+                return null
+              },
+            },
+          ]}
+          data={claims}
+          loading={loading}
+          onEdit={(row) => {
+            setReviewClaim(row)
+            setAdminNotes(row.adminNotes ?? '')
+          }}
+        />
+      </div>
+
+      <Dialog
+        open={!!reviewClaim}
+        onOpenChange={(open) => { if (!open) { setReviewClaim(null); setAdminNotes('') } }}
+      >
+        <DialogContent className="max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{reviewClaim?.status === 'pending_approval' ? 'Review Claim' : 'Claim Details'}</DialogTitle>
+          </DialogHeader>
+
+          {reviewClaim && (
+            <div className="space-y-3 text-sm">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                <div className="min-w-0">
+                  <span className="text-muted-foreground">Type</span>
+                  <p className="font-medium capitalize break-words">{reviewClaim.entityType}</p>
+                </div>
+                <div className="min-w-0">
+                  <span className="text-muted-foreground">Profile</span>
+                  {reviewClaim.profileUrl ? (
+                    <a
+                      href={reviewClaim.profileUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-medium text-black hover:underline break-words block"
+                    >
+                      {reviewClaim.entityName} ↗
+                    </a>
+                  ) : (
+                    <p className="font-medium break-words">{reviewClaim.entityName}</p>
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <span className="text-muted-foreground">Claimer</span>
+                  <p className="font-medium break-words">{reviewClaim.claimerName}</p>
+                </div>
+                <div className="min-w-0">
+                  <span className="text-muted-foreground">Email</span>
+                  <p className="font-medium break-all">{reviewClaim.claimerEmail}</p>
+                </div>
+                <div className="min-w-0">
+                  <span className="text-muted-foreground">Plan</span>
+                  <p className="font-medium break-words">{PLAN_LABELS[reviewClaim.selectedPlan ?? ''] ?? '—'}</p>
+                </div>
+
+                {reviewClaim.entityType === 'clinic' && (
+                  <>
+                    {reviewClaim.clinicNameInput && (
+                      <div className="col-span-2 min-w-0">
+                        <span className="text-muted-foreground">Clinic name</span>
+                        <p className="font-medium break-words">{reviewClaim.clinicNameInput}</p>
+                      </div>
+                    )}
+                    {reviewClaim.clinicPhone && (
+                      <div className="min-w-0">
+                        <span className="text-muted-foreground">Phone</span>
+                        <p className="font-medium break-words">{reviewClaim.clinicPhone}</p>
+                      </div>
+                    )}
+                    {reviewClaim.clinicWebsite && (
+                      <div className="min-w-0">
+                        <span className="text-muted-foreground">Website</span>
+                        <a href={reviewClaim.clinicWebsite} target="_blank" rel="noopener noreferrer" className="font-medium text-black hover:underline truncate block">
+                          {reviewClaim.clinicWebsite}
+                        </a>
+                      </div>
+                    )}
+                    {reviewClaim.googleBusinessLink && (
+                      <div className="col-span-2 min-w-0">
+                        <span className="text-muted-foreground">Google Business</span>
+                        <a href={reviewClaim.googleBusinessLink} target="_blank" rel="noopener noreferrer" className="font-medium text-black hover:underline truncate block">
+                          {reviewClaim.googleBusinessLink}
+                        </a>
+                      </div>
+                    )}
+                    {reviewClaim.isNewRegistration && (() => {
+                      const listing: NewListingData = reviewClaim.newListingData ? JSON.parse(reviewClaim.newListingData) : {}
+                      return (
+                        <>
+                          {listing.address && (
+                            <div className="col-span-2 min-w-0">
+                              <span className="text-muted-foreground">Address</span>
+                              <p className="font-medium break-words">{listing.address}{listing.city ? `, ${listing.city}` : ''}</p>
+                            </div>
+                          )}
+                          {listing.category && (
+                            <div className="min-w-0">
+                              <span className="text-muted-foreground">Category</span>
+                              <p className="font-medium break-words">{listing.category}</p>
+                            </div>
+                          )}
+                          {listing.about && (
+                            <div className="col-span-2 min-w-0">
+                              <span className="text-muted-foreground">About</span>
+                              <p className="font-medium whitespace-pre-wrap break-words">{listing.about}</p>
+                            </div>
+                          )}
+                        </>
+                      )
+                    })()}
+                  </>
+                )}
+
+                {reviewClaim.entityType === 'practitioner' && (
+                  <>
+                    {reviewClaim.profession && (
+                      <div className="min-w-0">
+                        <span className="text-muted-foreground">Profession</span>
+                        <p className="font-medium break-words">{reviewClaim.profession}</p>
+                      </div>
+                    )}
+                    {reviewClaim.clinicNameInput && (
+                      <div className="col-span-2 min-w-0">
+                        <span className="text-muted-foreground">Stated clinic</span>
+                        <p className="font-medium break-words">{reviewClaim.clinicNameInput}</p>
+                      </div>
+                    )}
+                    {reviewClaim.licenseNumber && (
+                      <div className="col-span-2 min-w-0">
+                        <span className="text-muted-foreground">Licence number</span>
+                        <p className="font-medium break-words">
+                          {reviewClaim.licenseNumber}
+                          {reviewClaim.registryName && (
+                            <span className="text-muted-foreground ml-1">({reviewClaim.registryName})</span>
+                          )}
+                        </p>
+                        <p className="text-xs text-amber-700 mt-0.5">Verify manually on the registry website before approving.</p>
+                      </div>
+                    )}
+                    {reviewClaim.isNewRegistration && (() => {
+                      const listing: NewListingData = reviewClaim.newListingData ? JSON.parse(reviewClaim.newListingData) : {}
+                      return (
+                        <>
+                          {listing.city && (
+                            <div className="min-w-0">
+                              <span className="text-muted-foreground">City</span>
+                              <p className="font-medium break-words">{listing.city}</p>
+                            </div>
+                          )}
+                          {listing.about && (
+                            <div className="col-span-2 min-w-0">
+                              <span className="text-muted-foreground">About</span>
+                              <p className="font-medium whitespace-pre-wrap break-words">{listing.about}</p>
+                            </div>
+                          )}
+                        </>
+                      )
+                    })()}
+                  </>
+                )}
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {reviewClaim.domainVerified && (
+                  <Badge className="bg-emerald-100 text-emerald-800 text-xs">Domain verified</Badge>
+                )}
+                {reviewClaim.affiliated && (
+                  <Badge className="bg-emerald-100 text-emerald-800 text-xs">Affiliated</Badge>
+                )}
+                {reviewClaim.requiresManualReview && (
+                  <Badge variant="destructive" className="text-xs">Manual review — personal email</Badge>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="admin-notes">Notes {reviewClaim.status === 'pending_approval' ? '(optional)' : ''}</Label>
+                <Textarea
+                  id="admin-notes"
+                  value={adminNotes}
+                  onChange={(e) => setAdminNotes(e.target.value)}
+                  placeholder="Reason for approval or rejection…"
+                  rows={3}
+                  readOnly={reviewClaim.status !== 'pending_approval'}
+                />
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="flex gap-2">
+            {reviewClaim?.status === 'pending_approval' ? (
+              <>
+                <Button variant="destructive" onClick={() => handleReview('reject')} disabled={submitting}>
+                  Reject
+                </Button>
+                <Button onClick={() => handleReview('approve')} disabled={submitting}>
+                  Approve
+                </Button>
+              </>
+            ) : (
+              <Button variant="outline" onClick={() => { setReviewClaim(null); setAdminNotes('') }}>
+                Close
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </AdminLayout>
+  )
+}

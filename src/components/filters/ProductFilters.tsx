@@ -1,5 +1,4 @@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Button } from "@/components/ui/button";
 import { product_categories, distributors, brands } from "@/lib/data";
 interface ProductFilters {
   product_category: string;
@@ -33,7 +32,8 @@ export function ProductFilters({ filters, onChange, onClear, setIsFilterActive }
           value={filters.query || ""}
           onChange={(e) => onChange("query", e.target.value)}
           placeholder="Search products..."
-          className="w-full px-3 py-2 text-base border rounded-md bg-white"
+          maxLength={255}
+          className="w-full px-3 py-2 text-base border rounded-lg bg-white"
         />
       </div>
 
@@ -51,7 +51,7 @@ export function ProductFilters({ filters, onChange, onClear, setIsFilterActive }
             if (open) setIsFilterActive(true);
           }}
         >
-          <SelectTrigger className="w-full h-12 px-4 py-3 bg-white border border-gray-300 rounded-md">
+          <SelectTrigger className="w-full h-12 px-4 py-3 bg-white border border-[#e0e0e0]  rounded-lg">
             <SelectValue placeholder="All" />
           </SelectTrigger>
           <SelectContent>
@@ -77,7 +77,7 @@ export function ProductFilters({ filters, onChange, onClear, setIsFilterActive }
             if (open) setIsFilterActive(true);
           }}
         >
-          <SelectTrigger className="w-full h-12 px-4 py-3 bg-white border border-gray-300 rounded-md">
+          <SelectTrigger className="w-full h-12 px-4 py-3 bg-white border border-[#e0e0e0]  rounded-lg">
             <SelectValue placeholder="All" />
           </SelectTrigger>
           <SelectContent>
@@ -103,7 +103,7 @@ export function ProductFilters({ filters, onChange, onClear, setIsFilterActive }
             if (open) setIsFilterActive(true);
           }}
         >
-          <SelectTrigger className="w-full h-12 px-4 py-3 bg-white border border-gray-300 rounded-md">
+          <SelectTrigger className="w-full h-12 px-4 py-3 bg-white border border-[#e0e0e0]  rounded-lg">
             <SelectValue placeholder="All" />
           </SelectTrigger>
           <SelectContent>
@@ -115,12 +115,6 @@ export function ProductFilters({ filters, onChange, onClear, setIsFilterActive }
         </Select>
       </div>
 
-      <Button
-        onClick={onClear}
-        className="w-full border border-black bg-transparent text-black hover:bg-white hover:text-black cursor-pointer"
-      >
-        Clear All
-      </Button>
     </>
   );
 }

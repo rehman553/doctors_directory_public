@@ -1,0 +1,361 @@
+# CLAUDE.md
+
+Guidance for Claude Code when working in this repository. Read fully before exploring files.
+
+---
+
+## Commands
+
+```bash
+npm run dev          # Start dev server on localhost:3000
+npm run build        # Build production bundle
+npm run start        # Start production server (4GB heap)
+npm run lint         # Run ESLint
+
+npm run test         # Run Jest unit tests (memory-optimised: 16GB heap, no cache)
+npm run test:batches # Run Jest in 3 parallel batches (batch-1/2/3)
+npm run test:e2e     # Run Playwright E2E tests
+npm run test:e2e:ui  # Playwright interactive UI
+npm run test:e2e:debug  # Playwright inspector
+npm run test:sitemap # Validate sitemap integrity
+```
+
+Run a single Jest test file:
+```bash
+npm run test -- --testPathPattern=city-clinics-batch-1
+npx jest src/__tests__/utils.test.ts
+npx jest -t "test name pattern"
+```
+
+Run a single Playwright test:
+```bash
+npm run test:e2e -- --project=chromium tests/e2e/my-spec.ts
+npm run test:e2e -- --project=chromium -g "test name"
+```
+
+Pre-commit: `npm run lint && npm run test && npm run build`
+
+---
+
+## Architecture
+
+**Stack**: Next.js 14.2 App Router, React 18, TypeScript (strict), Tailwind CSS 4, Zustand, Zod, shadcn/ui + Radix UI.
+
+**What it is:** Aesthetic medical directory. Patients search clinics, practitioners, treatments, products. Clinics claim their listing, choose a plan, and get a portal with leads, calendar, and chat.
+
+**Base path is `/directory`** — all routes, fetches, and assets must be prefixed with it (configured in `next.config.js`).
+
+**URL slugs** follow kebab-case (`/^[a-z0-9-]+$/`). Use `cleanRouteSlug()` from `@/lib/utils` when constructing paths.
+
+**Global state**: Zustand store at `src/stores/datastore.ts` holds search filter state. All other state is local React state.
+
+### Two distinct data layers — do not mix them
+
+| Layer | What it holds | How it's read |
+|---|---|---|
+| **JSON files** `/public/*.json` | Clinics, practitioners, products, treatments (scraped/static public data) | `src/actions/search.ts` server actions, NodeCache + Redis |
+| **MySQL via Prisma** | Claims, plans, bookings, chat sessions, leads, presence, reviews | `prisma` client from `@/lib/db` |
+
+**JSON data flow:**
+1. `server.js` prewarms JSON files into NodeCache (1-hour TTL) at startup. Primary PM2 worker reads disk → writes Redis; secondary workers read Redis, fall back to disk.
+2. Pages call server actions in `src/actions/search.ts` (React `cache()`-wrapped).
+3. Admin mutations call `writeJsonFile()` in `src/lib/admin/file-utils.ts` — writes disk + invalidates NodeCache + Redis.
+
+Key JSON files: `clinics_processed_new_data.json`, `derms_processed_new_5403.json`, `products_processed_new.json`, `treatments.json`, `city_data_processed.json`.
+
+---
+
+## Plans & feature gating
+
+`claimedPlan` on the `Clinic` Prisma model. Three values:
+
+| Value | Price | Features |
+|---|---|---|
+| `free` | £0 | Portal, prospects inbox, consultation chat (local only, no Core sync) |
+| `pay_per_lead` | £55/lead unlock | + Calendar, full Core chat sync, leads unlocked per payment |
+| `subscription` | £99/mo | + Calendar, Core chat sync, automatic booking sync from Core |
+
+**Gate pattern used everywhere — copy this exactly:**
+```ts
+const isFree = !clinic?.claimedPlan || clinic.claimedPlan === 'free'
+const hasCoreCalendar = clinic.coreClinicId !== null && clinic.claimedPlan !== 'free'
+```
+Never gate only on `!claimedPlan` — `'free'` is a real plan value, not null.
+
+Sidebar nav colours: cyan = subscription, violet = pay_per_lead, gray = free.
+
+---
+
+## Consentz Core integration
+
+`coreClinicId` on `Clinic` links the directory record to Core CRM. Set by admin on claim approval. Null = no Core integration.
+
+### Auth
+`src/lib/auth.ts` exports `consentzApi()` — handles token refresh automatically. Cookies (all path-scoped to `/directory`): `consentz_token`, `consentz_refresh_token`, `consentz_username`, `consentz_role`.
+
+Core-lite base URL: `new URL(process.env.CONSENTZ_AUTH_API_URL).origin + '/api/core-lite'`
+
+### In-person appointment booking
+- Availability: `GET /api/core-lite/clinics/{coreClinicId}/availability?date=YYYY-MM-DD`
+- Create: `POST /api/core-lite/clinics/{coreClinicId}/bookings` — `slot_start`/`slot_end` must be ISO 8601
+- Response: `{ booking: { id, status, slot_start, slot_end, practitioner, treatment, patient } }`
+- Mirrored into local `Booking` table via `upsert` on `coreBookingId`
+- Helpers: `getCoreAvailability()`, `createCoreBooking()` in `src/lib/core-api.ts`
+
+### Video call booking
+- Create: `POST /api/core-lite/clinics/{coreClinicId}/call-booking`
+- **Two response types:**
+  - `jitsi`: `{ call_type: 'jitsi', join_url: '...', join_url_ready: true, meeting_id }`
+  - `zoom`: `{ call_type: 'zoom', join_url: null, join_url_ready: false, meeting_id }` — must poll
+- Poll: `GET /api/core-lite/call-booking/{meetingId}` — same shape, `join_url_ready` flips to true when ready
+- Directory proxies: `POST /api/call/[slug]`, `GET /api/call/[slug]/meeting/[meetingId]`
+- UI: `src/components/clinic/call-booking-form.tsx` — polls every 10s for zoom, shows spinner
+
+### Consultation chat
+`src/lib/consentz-chat.ts` — three functions, no auth required (public endpoints):
+- `startCoreConversation()` → `POST .../inbox/start` → returns `conversation_id`
+- `sendCoreMessage()` → `POST .../inbox/{convId}/messages`
+- `pollCoreMessages(after?: unixSecs)` → `GET .../inbox/{convId}/messages?after={unix_ts}`
+
+Free plan: messages stored locally only, no Core push. Paid plans: pushed to Core.
+
+---
+
+## Lead-notification SMS (provider adapter)
+
+When a consultation/pricing lead comes in (`POST /api/leads`), the clinic is notified by
+email (nodemailer, unchanged) **and** — depending on `SMS_SEND_MODE` / `Clinic.smsNotifyMode`
+— by SMS. Send decision + templating: `src/lib/lead-sms-notify.ts`.
+
+- **Provider adapter** — `src/lib/sms/`. `SMS_PROVIDER` selects the backend: `plivo` (default),
+  `twilio`, or `off`. Each provider (`plivo.ts`, `twilio.ts`) implements the `SmsProvider`
+  interface in `provider.ts` (`send`, `verifyWebhook`, `parseStatus`, `parseInbound`);
+  `index.ts` picks the active one and exposes `sendLeadNotificationSms` / `sendLeadTeaserSms` /
+  `sendGhostLeadSms` plus the webhook helpers. Add a provider = new file + one line in `PROVIDERS`.
+  - **Plivo** sender: `PLIVO_POWERPACK_UUID` (preferred — pool + STOP suppression) or `PLIVO_FROM_NUMBER`.
+  - **Twilio** sender: `TWILIO_MESSAGING_SERVICE_SID` (preferred) or `TWILIO_FROM_NUMBER`.
+- **Send modes:** `fallback` (default) sends SMS only when the clinic has no email or the email
+  send threw; `always` sends on every lead with a usable phone; `off` never sends. `Clinic.smsNotifyMode`
+  (null = use env) overrides per clinic; a `STOP` reply flips it to `off`.
+- **Phone source:** `toE164()` in `src/lib/phone.ts` normalises the approved claim's
+  `clinicPhone`/`claimerPhone` (claimed) or the scraped `Clinic.gmapsPhone` — messy input, UK default.
+- **Templates** mirror the email ones: full notification (subscription), teaser (PPL/free),
+  ghost hook (unclaimed — only while `getClaimState` is still `unclaimed`).
+- **Tracking** on `ConsultationLead` (mirrors `notificationEmail*`):
+  - `notificationSmsSentAt` — the provider accepted the message
+  - `notificationSmsDeliveredAt` — carrier receipt via `POST /api/webhooks/sms/status` (signature-checked
+    through the active provider adapter)
+  - `notificationSmsReadAt` — clinic tapped the signed link → `GET /api/track/sms-click/[token]` (the SMS
+    analogue of the email open pixel; token from `src/lib/sms-tracking.ts`)
+  - `notificationSmsStatus` (raw provider status) / `notificationSmsSid` (Twilio SID / Plivo UUID) / `notificationSmsTo`
+- **Opt-out:** `POST /api/webhooks/sms/inbound` — STOP/START keywords flip `smsNotifyMode` for the matching clinic(s).
+- **GA:** server-side MP events `sms_notification_sent` / `_delivered` / `_read` (no PII).
+- **Admin dashboard:** "SMS sent" / "SMS read" columns on the leads tab of `/admin` tracking
+  (`src/components/admin/tracking-dashboard.tsx`, data from `src/lib/tracking/dashboard-queries.ts`).
+- **Smoke test:** `npm run sms:test -- +44…` sends through the exact same path as a real lead.
+- No provider configured ⇒ every send is a logged no-op (local dev / CI need no account).
+
+---
+
+## Clinic online status
+
+A clinic shows as **online** when all three are true:
+1. `clinic.claimed === true`
+2. `ClinicPresence.lastSeenAt` within 5 minutes (constant in `src/app/api/chat/[slug]/status/route.ts`)
+3. Current time falls within configured `ClinicHour` business hours (if no hours set, presence alone is sufficient)
+
+**Presence ping:** `PortalLayoutClient` POSTs to `/api/portal/presence` every 2 minutes while portal is open (`PRESENCE_INTERVAL_MS = 2 * 60 * 1000`).
+
+**Check endpoint:** `GET /api/chat/[slug]/status` → `{ online: boolean }`
+
+**Client component:** `src/components/clinic/online-status.tsx` — polls every 2 minutes.
+
+---
+
+## Portal auth
+
+`getPortalUser()` in `src/lib/portal.ts` — reads `consentz_username` cookie, finds approved `ClaimRequest`, returns:
+
+```ts
+type PortalUser = {
+  claimId: number
+  entityType: 'clinic' | 'practitioner'
+  entitySlug: string
+  entityName: string
+  clinicId: number | null
+  practitionerId: number | null
+  claimerName: string
+  claimerEmail: string
+}
+```
+
+Returns `null` if no approved claim. Portal pages redirect to `/portal/login`. Admin pages use `consentz_role` cookie.
+
+---
+
+## Chat — patient widget
+
+`src/components/chat/consultation-chat-dialog.tsx`
+
+- Floating widget: `fixed bottom-4 left-4 right-4 sm:left-auto sm:right-4 sm:w-96`
+- Height: `min(560px, calc(100dvh - 5rem))` — `dvh` for mobile Safari
+- **Session persistence:** localStorage key `chat:${slug}`, stores only `{ sessionId, visitorToken, savedAt }`. TTL = 24h. Messages fetched fresh from server on restore — nothing sensitive in localStorage.
+- Polling: every 3s when panel open and phase is `chat`. Stops when closed.
+- Phases: `idle` → `intro` → `form` → `chat`
+- "New chat" clears localStorage and resets all state
+
+## Chat — clinic portal inbox
+
+`src/components/portal/chat-inbox.tsx`
+
+- Session list polls every 5s; active conversation messages poll every 3s
+- **Auto-scroll rule:** scrolls only when `newCount > prevCount` (new messages arrived) AND user is within 150px of bottom. Initial conversation load scrolls instantly. Tracking resets on conversation switch — never scrolls on poll cycles with no new messages.
+- Unread dot shown when last message is from patient and session is active
+
+---
+
+## API routes
+
+```
+Public (no auth):
+  GET  /api/chat/[slug]/status                      online status check
+  POST /api/chat/[slug]/session                     start chat session
+  GET  /api/chat/[slug]/session/[id]/messages       poll messages
+  POST /api/chat/[slug]/session/[id]/messages       patient sends message
+  GET  /api/call/[slug]/slots                       video call availability
+  POST /api/call/[slug]                             book video call
+  GET  /api/call/[slug]/meeting/[id]                poll zoom meeting status
+  POST /api/book/[slug]                             book in-person appointment
+  GET  /api/book/[slug]/availability                appointment slot availability
+  GET  /api/track/email-open/[token]                email open pixel
+  GET  /api/track/sms-click/[token]                 lead SMS link tap → stamps read, redirects
+
+Webhooks (signature-gated, no cookie):
+  POST /api/webhooks/stripe                         Stripe events
+  POST /api/webhooks/sms/status                     SMS delivery status callback (active provider adapter)
+  POST /api/webhooks/sms/inbound                    inbound SMS — STOP/START opt-out
+
+Portal (cookie-gated via getPortalUser):
+  GET  /api/portal/chat/sessions                    inbox session list
+  GET  /api/portal/chat/sessions/[id]/messages      conversation messages
+  POST /api/portal/chat/sessions/[id]/messages      clinic reply
+  POST /api/portal/presence                         presence ping
+
+Admin (role cookie-gated):
+  GET/POST   /api/admin/[entity]/
+  GET/PUT/DELETE /api/admin/[entity]/[slug]/
+```
+
+---
+
+## Routing
+
+```
+Public:
+  /[cityslug]/                           city landing
+  /[cityslug]/clinic/[slug]/             clinic detail
+  /[cityslug]/practitioner/[slug]/       practitioner detail
+  /search                                search results
+
+Portal:
+  /portal/login
+  /portal/clinic                         dashboard
+  /portal/clinic/prospects               leads inbox (all plans)
+  /portal/clinic/calendar                calendar (paid plans only)
+  /portal/clinic/chat                    consultation inbox (all plans, limited on free)
+
+Admin:
+  /admin/*
+```
+
+---
+
+## Key files
+
+| Path | Purpose |
+|---|---|
+| `src/actions/search.ts` | Server actions — data load + search, React `cache()`-wrapped |
+| `src/lib/core-api.ts` | `getCoreAvailability()`, `createCoreBooking()` — Core CRM helpers |
+| `src/lib/consentz-chat.ts` | `startCoreConversation()`, `sendCoreMessage()`, `pollCoreMessages()` |
+| `src/lib/portal.ts` | `getPortalUser()` — portal session resolver |
+| `src/lib/auth.ts` | `consentzApi()`, cookie constants |
+| `src/lib/db.ts` | Prisma client singleton |
+| `src/lib/types.ts` | All shared TypeScript interfaces |
+| `src/lib/schemas/` | Zod schemas per entity |
+| `src/lib/admin/file-utils.ts` | `readJsonFile`, `writeJsonFile`, `prewarmFile` |
+| `src/lib/data.ts` | Static lookup tables: 1,650+ brands, 200+ accreditations, 73+ modalities |
+| `src/stores/datastore.ts` | Zustand search filter state |
+| `src/components/portal/PortalLayoutClient.tsx` | Sidebar nav — plan badge, lock icons, presence ping |
+| `src/components/portal/chat-inbox.tsx` | Admin chat inbox |
+| `src/components/portal/chat-badge.tsx` | Unread chat count badge |
+| `src/components/portal/lead-badge.tsx` | Unseen leads count badge |
+| `src/components/chat/consultation-chat-dialog.tsx` | Patient-facing chat widget |
+| `src/components/clinic/call-booking-form.tsx` | Video call booking (jitsi + zoom) |
+| `src/components/clinic/online-status.tsx` | Online/offline indicator on profile |
+| `src/components/Clinic/profile-header.tsx` | Clinic/practitioner page header |
+| `src/components/Clinic/clinicLabels.tsx` | Regulatory logos (CQC, HIW, HIS, JCCP, RQIA, Save Face) |
+| `src/components/clinic/accreditation-badges.tsx` | Accreditation card (right sidebar) |
+| `src/components/clinic/transparency-box.tsx` | Trust/transparency card (right sidebar) |
+| `tests/e2e/` | Playwright E2E (5 projects: Chrome, Firefox, Safari, Pixel 5, iPhone 12) |
+
+---
+
+## Prisma models — key fields
+
+| Model | Fields that matter |
+|---|---|
+| `Clinic` | `claimed`, `claimedPlan`, `coreClinicId`, `stripeCustomerId`, `verified`, `idVerified`, `smsNotifyMode` |
+| `ClaimRequest` | `status` (pending_otp → otp_verified → pending_approval → approved/rejected), `selectedPlan`, `consentzClinicId`, `consentzUsername` |
+| `ConsultationLead` | `isUnlocked`, `isGhostLead`, `seenAt`, `stripePaymentIntentId`, `notificationEmail*`, `notificationSms*` |
+| `Booking` | `coreBookingId`, `syncedFromCore`, `status` (pending/confirmed/cancelled/completed/no_show) |
+| `ChatSession` | `visitorToken` (unique), `coreConversationId`, `status` (active/closed) |
+| `ChatMessage` | `sender` (patient/clinic), `coreMessageId` |
+| `ClinicPresence` | `lastSeenAt` — upserted on every portal ping |
+
+---
+
+## Patterns and conventions
+
+**Imports** — group: external libs → internal `@/` → relative; sort alphabetically. Use `import type` for type-only imports.
+
+**Naming** — components PascalCase; files kebab-case; functions/variables camelCase; types/interfaces PascalCase.
+
+**Components** — `'use client'` at top for client components; props interface before export; `cn()` from `@/lib/utils` for conditional Tailwind; `next/image` for allowlisted domains, `<img>` for external/dynamic URLs; semantic HTML + `aria-label`.
+
+**API routes** — named exports `GET`/`POST`/`PUT`/`DELETE`; Zod validation before processing; always `try/catch` with `console.error`; `NextResponse.json()` with correct status codes.
+
+**Types** — shared types from `src/lib/types.ts`. `interface` for object shapes, `type` for unions. `unknown` over `any`. Type guards: `function isFoo(obj: unknown): obj is Foo`.
+
+**Key utilities**: `cn()`, `safeParse()`, `decodeUnicodeEscapes()`, `cleanRouteSlug()` — from `@/lib/utils` or `@/lib/admin/file-utils`.
+
+---
+
+## Environment variables
+
+| Variable | Used for |
+|---|---|
+| `CONSENTZ_AUTH_API_URL` | Base for all Core API calls. Core-lite base = `new URL(x).origin + '/api/core-lite'` |
+| `DATABASE_URL` | MySQL connection string (Prisma) |
+| `STRIPE_SECRET_KEY` | Stripe server-side operations |
+| `STRIPE_WEBHOOK_SECRET` | Stripe webhook signature validation |
+| `RESEND_API_KEY` | Transactional email |
+| `UNSUBSCRIBE_SECRET` | HMAC signing for campaign unsubscribe/unlist links (`src/lib/campaign-unsubscribe.ts`) + account-deletion cancel links |
+| `EMAIL_TRACKING_SECRET` | HMAC signing for the email open-tracking pixel token (`src/lib/email-open-tracking.ts`) |
+| `INTERNAL_CRON_SECRET` | Bearer secret for the internal purge-deletions cron endpoint |
+| `GA4_MP_API_SECRET` / `GA4_PROPERTY_ID` | Server-side GA4 Measurement Protocol events + admin GA analytics dashboard |
+| `GA4_APP_PROPERTY_ID` | Optional. Numeric id of the Consentz app (control.consentz.com / ConsentzLive) GA4 property — feeds the "Consentz app" section of the admin GA4 report (`src/lib/analytics/ga-app-dashboard.ts`). Same service account, needs Viewer on it |
+| `SMS_PROVIDER` | `plivo` (default) \| `twilio` \| `off` — selects the lead-notification SMS backend (`src/lib/sms/`) |
+| `PLIVO_AUTH_ID` / `PLIVO_AUTH_TOKEN` + a sender (`PLIVO_POWERPACK_UUID` preferred, or `PLIVO_FROM_NUMBER`) | Plivo provider creds. Absent ⇒ every send is a logged no-op |
+| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` + a sender (`TWILIO_MESSAGING_SERVICE_SID` preferred, or `TWILIO_FROM_NUMBER`) | Twilio provider creds. Absent ⇒ every send is a logged no-op |
+| `SMS_SEND_MODE` | `fallback` (default) \| `always` \| `off` — global default, overridden per-clinic by `Clinic.smsNotifyMode` |
+| `SMS_TRACKING_SECRET` | HMAC signing for the tracked link in lead-notification SMS (tap = "read") |
+
+---
+
+## Deployment
+
+- Docker multi-stage build (Alpine 3.23) + PM2 cluster (`ecosystem.config.js`)
+- Custom Express server (`server.js`) pre-warms file cache on startup
+- Blue-green deployment via GitHub Actions (`.github/workflows/deploy-staging.yml`, `deploy.yml`)
+- Health check: `GET /directory/api/healthz/`
+- Memory restart threshold: 1,100 MB per PM2 instance

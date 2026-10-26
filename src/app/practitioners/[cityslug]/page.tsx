@@ -1,13 +1,7 @@
-import { notFound } from "next/navigation";
 import Link from "next/link";
-import { Card, CardHeader, CardContent } from "@/components/ui/card";
+import { notFound } from "next/navigation";
 import type { Clinic, Practitioner, City } from "@/lib/types";
-import { Badge } from "@/components/ui/badge";
-import { Star, MapPin } from "lucide-react";
-import fs from "fs";
-import path from "path";
-import clinicsJson from "@/../public/clinics_processed_new_data.json";
-import cityJson from "@/../public/city_data_processed.json";
+import { readJsonFileSync } from "@/lib/json-cache";
 import { CityPageData } from "@/components/cityPageData";
 import { MoreItems } from "@/components/MoreItems";
 import { locations } from "@/lib/data";
@@ -20,33 +14,39 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
-import { ArrowLeft } from "lucide-react"
 import ItemsGrid from "@/components/collectionGrid";
-import { SearchBar } from "@/components/search/search-bar";
 import { CollectionsFilter } from "@/components/filters/collectionsFilterWrapper";
-const clinicsData = clinicsJson as unknown as Clinic[];
-const clinics = clinicsData
-  const clinicIndex = new Map(
-  clinics.filter(c=>c.slug !== undefined).map(c => [c.slug!, c])
-)
-const filePath = path.join(process.cwd(), "public", "derms_processed_new_5403.json");
-     const fileContents = fs.readFileSync(filePath, "utf-8");
-     const all_practitioners: Practitioner[] = JSON.parse(fileContents);
-       const practitioners = all_practitioners
-    .map(p => {
-      const clinic = clinicIndex.get(JSON.parse(p.Associated_Clinics!)[0])
-      
-      if (!clinic) return null
-      return {
-        ...clinic,
-        practitioner_name: p.practitioner_name,
-        practitioner_title: p.practitioner_title,
-        practitioner_qualifications: p.practitioner_qualifications,
-        practitioner_awards: p.practitioner_awards,
-      }
-    
-    })
-    .filter((item) => item !==null).filter(Boolean)
+import { EmptyCityState } from "@/components/empty-city-state";
+import { BestRankedBlock } from "@/components/best-ranked-block";
+import { buildPractitionerRankedEntries } from "@/lib/best-ranked";
+import { capitalize } from "@/lib/utils";
+import { resolveDirectoryPageMeta } from "@/lib/directory-page-meta";
+import { getPractitionerDirectoryRobots } from "@/lib/practitioner-profile-robots";
+import { toDirectoryCanonical } from "@/lib/seo";
+import { getClinics, getEnrichedPractitioners } from "@/lib/sitemap-data";
+import { isRemovedPractitionerSlug } from "@/lib/directory-removals";
+import { DirectoryJsonLd } from "@/components/directory-json-ld";
+import {
+  buildBreadcrumbListJsonLd,
+  buildItemListJsonLd,
+  practitionerItemListFromProfiles,
+} from "@/lib/directory-json-ld";
+import { IconArrowNarrowLeft } from "@tabler/icons-react";
+
+function getPopularTreatments(items: Clinic[]): string[] {
+  const counts = new Map<string, number>();
+
+  for (const clinic of items) {
+    for (const treatment of clinic.Treatments ?? []) {
+      counts.set(treatment, (counts.get(treatment) ?? 0) + 1);
+    }
+  }
+
+  return [...counts.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 15)
+    .map(([treatment]) => treatment);
+}
 interface ProfilePageProps {
   params: {
     cityslug: string;
@@ -54,68 +54,89 @@ interface ProfilePageProps {
   };
 }
 
-export default async function ProfilePage({ params }: Readonly<ProfilePageProps>) {
-  
-  
-  
-  const citySlug = params.cityslug;
-  const normalizedCitySlug = decodeURIComponent(citySlug).toLowerCase();
-  const cityData: City = (cityJson as unknown as City[]).find(
-    (p) => p.City?.toLowerCase() === normalizedCitySlug
-  )!;
-  const cityClinics: Practitioner[] = practitioners.filter(
-    (p) => p.City?.toLowerCase() === normalizedCitySlug
-  );
-    const uniqueTreatments = [
-  ...new Set(
-    cityClinics
-      .filter(c => Array.isArray(c.Treatments))
-      .flatMap(c => c.Treatments).filter((t): t is string => typeof t === "string")
-  )
-];
+export const revalidate = 300
 
-  const defaultClinics: Practitioner[] = practitioners.filter((p) => p.City === "London");
-  const defaultTreatments = [
-  ...new Set(
-      defaultClinics
-      .filter(c => Array.isArray(c.Treatments))
-      .flatMap(c => c.Treatments).filter((t): t is string => typeof t === "string")
-  )
-];
-  if (!cityClinics) {
+const practitioners = getEnrichedPractitioners()
+const clinics = getClinics()
+
+export default function ProfilePage({ params }: Readonly<ProfilePageProps>) {
+
+  const citySlug = params.cityslug;
+  const displayCityName = capitalize(citySlug);
+  const normalizedCitySlug = decodeURIComponent(citySlug).toLowerCase();
+  if (normalizedCitySlug === "4qr") {
     notFound();
   }
+  const cityData = (readJsonFileSync<City[]>('city_data_processed.json')).find(
+    (p) => p.City?.toLowerCase() === normalizedCitySlug
+  );
+  const cityClinics: Practitioner[] = practitioners.filter(
+    (p) =>
+      p.City?.toLowerCase() === normalizedCitySlug &&
+      !isRemovedPractitionerSlug(p.practitioner_name)
+  );
+  const hasCityPractitioners = cityClinics.length > 0;
+  const rankedCityPractitioners = buildPractitionerRankedEntries(cityClinics, 5);
+  const uniqueTreatments = [
+    ...new Set(
+      cityClinics
+        .filter(c => Array.isArray(c.Treatments))
+        .flatMap(c => c.Treatments).filter((t): t is string => typeof t === "string")
+    )
+  ];
+
+  const defaultClinics: Practitioner[] = practitioners.filter((p) => p.City === "London");
+  const popularClinics = [...clinics]
+    .filter((clinic) => clinic.slug)
+    .sort((left, right) => (right.reviewCount || 0) - (left.reviewCount || 0) || (Number(right.rating) || 0) - (Number(left.rating) || 0))
+    .slice(0, 6);
+  const popularPractitioners = [...practitioners]
+    .sort((left, right) => (right.reviewCount || 0) - (left.reviewCount || 0) || (Number(right.rating) || 0) - (Number(left.rating) || 0))
+    .slice(0, 6);
+  const popularTreatments = getPopularTreatments(clinics);
+  const defaultTreatments = [
+    ...new Set(
+      defaultClinics
+        .filter(c => Array.isArray(c.Treatments))
+        .flatMap(c => c.Treatments).filter((t): t is string => typeof t === "string")
+    )
+  ];
+  const cityPath = `/practitioners/${normalizedCitySlug}`
+  const jsonLdSchemas = [
+    buildBreadcrumbListJsonLd([
+      { name: "Home", path: "/" },
+      { name: "Practitioners", path: "/practitioners" },
+      { name: displayCityName, path: cityPath },
+    ]),
+    buildItemListJsonLd(
+      `Practitioners in ${displayCityName}`,
+      practitionerItemListFromProfiles(cityClinics)
+    ),
+  ]
 
   return (
-    <main className="bg-(--primary-bg-color)">
-      <SearchBar />
-      <div className="mx-auto max-w-6xl md:px-4 py-4 md:py-12">
+    <main className="bg-white">
+      <div className="mx-auto max-w-7xl md:px-4 py-4 md:py-12">
         <div className="flex flex-col pt-2 w-full pb-4 px-4 md:px-0 md:pt-0 md:border-0 border-b border-[#C4C4C4]">
           <div className="sticky top-0 z-10">
-            <Link className="mb-2 inline-block" href="/" prefetch={false}>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="gap-2 hover:cursor-pointer hover:bg-white hover:text-black"
-              >
-                <ArrowLeft className="h-4 w-4" />
+            <Link className="mb-4 inline-flex items-center gap-3 text-sm hover:underline" href="/" prefetch={false}>
+                <IconArrowNarrowLeft stroke={1.5} className="h-4 w-4" />
                 Back to Directory
-              </Button>
             </Link>
             <Breadcrumb>
               <BreadcrumbList>
                 <BreadcrumbItem>
-                  <BreadcrumbLink href="/directory">Home</BreadcrumbLink>
+                  <BreadcrumbLink href="/">Home</BreadcrumbLink>
                 </BreadcrumbItem>
                 <BreadcrumbSeparator />
                 <BreadcrumbItem>
-                  <BreadcrumbLink href="/directory/practitioners">
+                  <BreadcrumbLink href="/practitioners">
                     Practitioners
                   </BreadcrumbLink>
                 </BreadcrumbItem>
                 <BreadcrumbSeparator />
                 <BreadcrumbItem>
-                  <BreadcrumbLink href={`/directory/practitioners/${normalizedCitySlug}`}>{citySlug.charAt(0).toUpperCase() + citySlug.slice(1)}</BreadcrumbLink>
+                  <BreadcrumbLink href={`/practitioners/${normalizedCitySlug}`}>{displayCityName}</BreadcrumbLink>
                 </BreadcrumbItem>
               </BreadcrumbList>
             </Breadcrumb>
@@ -123,35 +144,58 @@ export default async function ProfilePage({ params }: Readonly<ProfilePageProps>
           
          
           <div className="flex flex-col pt-2 w-full pb-4 px-4 md:px-0">
-            <h1 className="text-sm md:text-2xl md:font-semibold mb-1 md:mb-2">Top Aesthetic Practitioners in {citySlug}</h1></div>
+            <h1 className="text-sm md:text-2xl md:font-semibold mb-1 md:mb-2">Top Aesthetic Practitioners in {displayCityName}</h1></div>
 
-        <div className="mx-auto max-w-7xl md:px-4 py-4 md:py-12 flex flex-col sm:flex-row justify-center w-full md:gap-10">
-          <CollectionsFilter pageType="Practitioner" />
-          <div className="flex-1 min-w-0">
-            <ItemsGrid items={cityClinics} />
+        {hasCityPractitioners && (
+          <div className="px-4 md:px-0 pb-4">
+            <BestRankedBlock
+              title={`Best Practitioners in ${displayCityName}`}
+              entries={rankedCityPractitioners}
+            />
           </div>
-        </div>
+        )}
 
-        <div className="px-4 md:px-0 space-y-6">
-          <h3 className="text-lg font-semibold text-foreground mb-2">{`Top Treatments in ${citySlug}`}</h3>
-          <MoreItems
-            items={
-              uniqueTreatments.length === 0
-                ? defaultTreatments
-                : uniqueTreatments
-            }
-          />
-          <h3 className="text-lg font-semibold text-foreground mb-2">{`Top Cities in the UK`}</h3>
-          <MoreItems items={locations} />
+          <div className="mx-auto max-w-7xl md:px-4 pb-4 pt-4 md:pb-7 flex flex-col sm:flex-row justify-center w-full md:gap-10 px-4 md:px-0">
+            <div className="hidden sm:block">
+            <CollectionsFilter pageType="Practitioner" />
+            </div>
+            <div className="flex-1 min-w-0">
+              {hasCityPractitioners ? (
+                <ItemsGrid items={cityClinics} />
+              ) : (
+                <EmptyCityState
+                  citySlug={citySlug}
+                  pageLabel="practitioners"
+                  popularClinics={popularClinics}
+                  popularPractitioners={popularPractitioners}
+                  popularTreatments={popularTreatments}
+                />
+              )}
+            </div>
+          </div>
+
+          {hasCityPractitioners && (
+            <div className="px-4 md:px-0 space-y-6">
+              <h3 className="text-lg font-semibold text-foreground mb-2">{`Top Treatments in ${displayCityName}`}</h3>
+              <MoreItems
+                items={
+                  uniqueTreatments.length === 0
+                    ? defaultTreatments
+                    : uniqueTreatments
+                }
+              />
+              <h3 className="text-lg font-semibold text-foreground mb-2">{`Top Cities in the UK`}</h3>
+              <MoreItems items={locations} />
+            </div>
+          )}
+          {cityData && hasCityPractitioners && <CityPageData
+            cityData={cityData}
+            uniqueTreatments={uniqueTreatments as string[]}
+            citySlug={citySlug}
+            cityClinics={cityClinics}
+          />}
         </div>
-        <CityPageData
-          cityData={cityData}
-          uniqueTreatments={uniqueTreatments as string[]}
-          citySlug={citySlug}
-          cityClinics={cityClinics}
-        />
-      </div>
-    </main>
+      </main>
   );
 }
 
@@ -179,3 +223,38 @@ export default async function ProfilePage({ params }: Readonly<ProfilePageProps>
 //     description: `View the profile of ${clinicName}, a qualified ${clinic.category} offering professional healthcare services. Read reviews and book appointments.`,
 //   }
 // }
+
+export async function generateMetadata({ params }: ProfilePageProps) {
+  const citySlug = decodeURIComponent(params.cityslug).toLowerCase();
+  const displayCityName = capitalize(citySlug);
+  const canonical = toDirectoryCanonical(`/practitioners/${citySlug}`)
+  const meta = resolveDirectoryPageMeta(`/practitioners/${citySlug}/`, {
+    title: `Best Verified Aesthetic Practitioners in ${displayCityName} - Reviews & Booking`,
+    description: `Find the best verified aesthetic practitioners in ${displayCityName}. Compare qualifications, real patient reviews and book your consultation.`,
+  })
+  const title = meta.title
+  const description = meta.description
+
+  const robots = getPractitionerDirectoryRobots();
+
+  return {
+    title,
+    description,
+    keywords: meta.keywords,
+    alternates: {
+      canonical,
+    },
+    openGraph: {
+      title,
+      description,
+      url: canonical,
+      type: "website",
+    },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description,
+    },
+    ...(robots ? { robots } : {}),
+  };
+}

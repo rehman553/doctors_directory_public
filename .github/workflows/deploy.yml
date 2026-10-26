@@ -1,0 +1,157 @@
+name: Build And Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  CONTAINER_NAME: doctors-directory
+  APP_PORT: "3000"
+  DEPLOY_DIR: /opt/doctors-directory
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set image name
+        shell: bash
+        run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          cache-from: type=gha,scope=production
+          cache-to: type=gha,mode=min,scope=production
+          build-args: |
+            NEXT_PUBLIC_DIRECTORY_BASE_URL=${{ vars.NEXT_PUBLIC_DIRECTORY_BASE_URL }}
+            NEXT_PUBLIC_BASE_URL=${{ vars.NEXT_PUBLIC_BASE_URL }}
+            NEXT_PUBLIC_MARKETING_BASE_URL=${{ vars.NEXT_PUBLIC_MARKETING_BASE_URL }}
+            NEXT_PUBLIC_GA_MEASUREMENT_ID=${{ vars.NEXT_PUBLIC_GA_MEASUREMENT_ID }}
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+  deploy-and-cleanup:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set image name
+        shell: bash
+        run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: Copy compose file to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          source: docker-compose.yml
+          target: ${{ env.DEPLOY_DIR }}
+
+      - name: Deploy and cleanup on server
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}:latest
+          DEPLOY_DIR: ${{ env.DEPLOY_DIR }}
+          COMPOSE_PROJECT_NAME: ${{ env.CONTAINER_NAME }}
+          APP_PORT: ${{ vars.APP_PORT || env.APP_PORT }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          DB_ROOT_PASSWORD: ${{ secrets.DB_ROOT_PASSWORD }}
+          NEXT_PUBLIC_DIRECTORY_BASE_URL: ${{ vars.NEXT_PUBLIC_DIRECTORY_BASE_URL }}
+          NEXT_PUBLIC_BASE_URL: ${{ vars.NEXT_PUBLIC_BASE_URL }}
+          NEXT_PUBLIC_MARKETING_BASE_URL: ${{ vars.NEXT_PUBLIC_MARKETING_BASE_URL }}
+          NEXT_PUBLIC_GA_MEASUREMENT_ID: ${{ vars.NEXT_PUBLIC_GA_MEASUREMENT_ID }}
+          CONSENTZ_AUTH_API_URL: ${{ secrets.CONSENTZ_AUTH_API_URL }}
+          CONSENTZ_APPLICATION_ID: ${{ vars.CONSENTZ_APPLICATION_ID }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ vars.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          EMAIL_FROM: ${{ vars.EMAIL_FROM }}
+          ADMIN_EMAIL: ${{ vars.ADMIN_EMAIL }}
+          SMS_PROVIDER: ${{ vars.SMS_PROVIDER }}
+          PLIVO_AUTH_ID: ${{ secrets.PLIVO_AUTH_ID }}
+          PLIVO_AUTH_TOKEN: ${{ secrets.PLIVO_AUTH_TOKEN }}
+          PLIVO_POWERPACK_UUID: ${{ secrets.PLIVO_POWERPACK_UUID }}
+          PLIVO_FROM_NUMBER: ${{ vars.PLIVO_FROM_NUMBER }}
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_MESSAGING_SERVICE_SID: ${{ secrets.TWILIO_MESSAGING_SERVICE_SID }}
+          TWILIO_FROM_NUMBER: ${{ vars.TWILIO_FROM_NUMBER }}
+          SMS_SEND_MODE: ${{ vars.SMS_SEND_MODE }}
+          SMS_TRACKING_SECRET: ${{ secrets.SMS_TRACKING_SECRET }}
+          EMAIL_TRACKING_SECRET: ${{ secrets.EMAIL_TRACKING_SECRET }}
+          UNSUBSCRIBE_SECRET: ${{ secrets.UNSUBSCRIBE_SECRET }}
+          INTERNAL_CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          GA4_MP_API_SECRET: ${{ secrets.GA4_MP_API_SECRET }}
+          GA4_PROPERTY_ID: ${{ vars.GA4_PROPERTY_ID }}
+          GA4_APP_PROPERTY_ID: ${{ vars.GA4_APP_PROPERTY_ID }}
+          TRACKING_DASHBOARD_TOKEN: ${{ secrets.TRACKING_DASHBOARD_TOKEN }}
+          PATIENT_SESSION_SECRET: ${{ secrets.PATIENT_SESSION_SECRET }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GSC_SERVICE_ACCOUNT_CREDENTIALS: ${{ secrets.GSC_SERVICE_ACCOUNT_CREDENTIALS }}
+          GSC_SITE_URL: ${{ vars.GSC_SITE_URL }}
+          APPLE_CLIENT_ID: ${{ secrets.APPLE_CLIENT_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_KEY_ID: ${{ secrets.APPLE_KEY_ID }}
+          APPLE_PRIVATE_KEY: ${{ secrets.APPLE_PRIVATE_KEY }}
+          DIRECTORY_LINK_SECRET: ${{ secrets.DIRECTORY_LINK_SECRET }}
+          ADMIN_USERNAMES: ${{ secrets.ADMIN_USERNAMES }}
+          GBP_ENABLED: ${{ vars.GBP_ENABLED }}
+          GBP_REGION_CODE: ${{ vars.GBP_REGION_CODE }}
+          GBP_GOOGLE_CLIENT_ID: ${{ secrets.GBP_GOOGLE_CLIENT_ID }}
+          GBP_GOOGLE_CLIENT_SECRET: ${{ secrets.GBP_GOOGLE_CLIENT_SECRET }}
+          GBP_TOKEN_ENC_KEY: ${{ secrets.GBP_TOKEN_ENC_KEY }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          envs: IMAGE_NAME,DEPLOY_DIR,COMPOSE_PROJECT_NAME,APP_PORT,GHCR_USERNAME,GHCR_TOKEN,DB_ROOT_PASSWORD,NEXT_PUBLIC_DIRECTORY_BASE_URL,NEXT_PUBLIC_BASE_URL,NEXT_PUBLIC_MARKETING_BASE_URL,NEXT_PUBLIC_GA_MEASUREMENT_ID,CONSENTZ_AUTH_API_URL,CONSENTZ_APPLICATION_ID,STRIPE_SECRET_KEY,STRIPE_WEBHOOK_SECRET,SMTP_HOST,SMTP_PORT,SMTP_USER,SMTP_PASS,EMAIL_FROM,ADMIN_EMAIL,SMS_PROVIDER,PLIVO_AUTH_ID,PLIVO_AUTH_TOKEN,PLIVO_POWERPACK_UUID,PLIVO_FROM_NUMBER,TWILIO_ACCOUNT_SID,TWILIO_AUTH_TOKEN,TWILIO_MESSAGING_SERVICE_SID,TWILIO_FROM_NUMBER,SMS_SEND_MODE,SMS_TRACKING_SECRET,EMAIL_TRACKING_SECRET,UNSUBSCRIBE_SECRET,INTERNAL_CRON_SECRET,GA4_MP_API_SECRET,GA4_PROPERTY_ID,GA4_APP_PROPERTY_ID,TRACKING_DASHBOARD_TOKEN,PATIENT_SESSION_SECRET,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,GSC_SERVICE_ACCOUNT_CREDENTIALS,GSC_SITE_URL,APPLE_CLIENT_ID,APPLE_TEAM_ID,APPLE_KEY_ID,APPLE_PRIVATE_KEY,DIRECTORY_LINK_SECRET,ADMIN_USERNAMES,GBP_ENABLED,GBP_REGION_CODE,GBP_GOOGLE_CLIENT_ID,GBP_GOOGLE_CLIENT_SECRET,GBP_TOKEN_ENC_KEY
+          script: |
+            set -euo pipefail
+
+            docker login ghcr.io -u "$GHCR_USERNAME" -p "$GHCR_TOKEN"
+
+            cd "$DEPLOY_DIR"
+            docker compose pull
+            docker compose up -d --remove-orphans
+
+            echo "Deployment completed successfully"
+
+            # Only reclaim dangling/old layers — keep the previous image's layers
+            # cached so the next `docker compose pull` fetches diffs, not the full image.
+            docker image prune -af --filter "until=24h"
+            docker container prune -f
+            echo "Docker cleanup completed"

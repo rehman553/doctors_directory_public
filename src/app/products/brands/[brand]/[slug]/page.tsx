@@ -1,11 +1,11 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ProfileHeader } from "@/components/Product/profile-header";
 import ClinicDetailsMarkdown from "@/components/Product/ProductDetailsMD";
 import { Product } from "@/lib/types";
-import fs from "fs";
+import { getProductBySlug, getProductsByBrand } from "@/lib/data-access/products";
+import { isRemovedProductSlug } from "@/lib/product-removals";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -14,77 +14,67 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
-import path from "path";
 import PractitionerTabs from "@/components/Product/ProductTabs";
 import ItemsGrid from "@/components/collectionGrid";
 import { MoreItems } from "@/components/MoreItems";
 import { locations } from "@/lib/data";
-import clinicsJSON from "@/../public/clinics_processed_new_data.json";
-import { Clinic } from "@/lib/types";
+import { getAllClinicsForSearch } from "@/lib/data-access/clinics";
+import { getAllTreatmentNames } from "@/lib/data-access/treatments";
+import { toDirectoryCanonical } from "@/lib/seo";
+import { IconArrowNarrowLeft } from "@tabler/icons-react";
 
 
 interface ProfilePageProps {
   params: {
+    brand: string;
     slug: string;
   };
 }
 
 export default async function ProfilePage({ params }: Readonly<ProfilePageProps>) {
-  const filePath = path.join(process.cwd(), "public", "products_processed_new.json");
-  const fileContents = fs.readFileSync(filePath, "utf-8");
-  const clinics: Product[] = JSON.parse(fileContents);
   const { slug } = params;
 
-  const clinic = clinics.find((p) => p.slug === slug);
+  if (isRemovedProductSlug(slug)) {
+    notFound();
+  }
 
-  const similarProducts = clinics.filter((p) => p.brand === clinic?.brand && p.slug !== slug);
-
-  const allClinics = clinicsJSON as unknown as Clinic[];
-  const uniqueTreatments = [
-    ...new Set(
-      allClinics
-        .filter(c => Array.isArray(c.Treatments))
-        .flatMap(c => c.Treatments).filter((t): t is string => typeof t === "string")
-    )
-  ];
-  
-
+  const clinic = await getProductBySlug(slug);
   if (!clinic) {
     notFound();
   }
 
+  const [brandProducts, uniqueTreatments] = await Promise.all([
+    getProductsByBrand(clinic.brand || ''),
+    getAllTreatmentNames(),
+  ]);
+  const similarProducts = brandProducts.filter((p) => p.slug !== slug);
+
   return (
-    <main className="min-h-screen bg-(--primary-bg-color)">
+    <main className="min-h-screen bg-[#fbfbfb]">
       {/* Navigation */}
       <div className="sticky top-0 z-10">
-        <div className="container mx-auto max-w-6xl px-4 py-4">
-          <Link href="/" prefetch={false}>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="gap-2 hover:cursor-pointer hover:bg-white hover:text-black"
-            >
-              <ArrowLeft className="h-4 w-4" />
+        <div className="container mx-auto max-w-7xl px-4 py-4">
+          <Link href="/" prefetch={false} className="mb-4 inline-flex items-center gap-3 text-sm hover:underline">
+              <IconArrowNarrowLeft stroke={1.5} className="h-4 w-4" />
               Back to Directory
-            </Button>
           </Link>
         </div>
-        <div className="container mx-auto max-w-6xl px-4 py-2">
+        <div className="container mx-auto max-w-7xl px-4 py-2">
           <Breadcrumb>
             <BreadcrumbList>
               <BreadcrumbItem>
-                <BreadcrumbLink href="/directory">Home</BreadcrumbLink>
+                <BreadcrumbLink href="/">Home</BreadcrumbLink>
               </BreadcrumbItem>
               <BreadcrumbSeparator />
               <BreadcrumbItem>
-                <BreadcrumbLink href="/directory/products">
+                <BreadcrumbLink href="/products">
                   Products
                 </BreadcrumbLink>
               </BreadcrumbItem>
               <BreadcrumbSeparator />
               <BreadcrumbItem>
                 <BreadcrumbLink
-                  href={`/directory/products/brands/${clinic.brand}`}
+                  href={`/products/brands/${clinic.brand}`}
                 >{`${clinic.brand}`}</BreadcrumbLink>
               </BreadcrumbItem>
               <BreadcrumbSeparator />
@@ -96,7 +86,7 @@ export default async function ProfilePage({ params }: Readonly<ProfilePageProps>
         </div>
       </div>
 
-      <div className="container mx-auto max-w-6xl pt-0 md:px-4 py-20 space-y-8">
+      <div className="container mx-auto max-w-7xl pt-0 md:px-4 py-20 space-y-8">
         {/* Profile Header */}
         <ProfileHeader clinic={clinic} />
 
@@ -108,8 +98,9 @@ export default async function ProfilePage({ params }: Readonly<ProfilePageProps>
               <ClinicDetailsMarkdown clinic={clinic} />
             </div>
           </div>
+          <h2 className="text-lg font-semibold text-foreground mb-2">{`Browse more ${clinic.product_category}`}</h2>
+        
         </div>
-        <h2 className="text-lg font-semibold text-foreground mb-2">{`Browse more ${clinic.product_category}`}</h2>
         <ItemsGrid items={similarProducts} />
         <div className="px-4 md:px-0 space-y-6">
           <h3 className="text-lg font-semibold text-foreground mb-2">{`Top Treatments`}</h3>
@@ -163,3 +154,43 @@ export default async function ProfilePage({ params }: Readonly<ProfilePageProps>
 //     },
 //   };
 // }
+
+export async function generateMetadata({ params }: ProfilePageProps) {
+  const clinic = await getProductBySlug(params.slug);
+  const brandSlug = decodeURIComponent(params.brand).toLowerCase();
+  const productSlug = decodeURIComponent(params.slug).toLowerCase();
+  const canonicalUrl = toDirectoryCanonical(`/products/brands/${brandSlug}/${productSlug}`);
+
+  if (isRemovedProductSlug(params.slug) || !clinic) {
+    return {
+      title: "Product Not Found",
+      alternates: {
+        canonical: canonicalUrl,
+      },
+    };
+  }
+
+  const productName = clinic.product_name ?? clinic.slug.replaceAll("-", " ");
+  const brandName = clinic.brand ?? decodeURIComponent(params.brand).replaceAll("-", " ");
+  const category = clinic.product_category ?? clinic.category ?? "Aesthetic";
+
+  return {
+    title: `${productName} by ${brandName}: Pricing and Specs`,
+    description: `Get pricing and specs for ${productName} by ${brandName}. Compare wholesale costs and availability from verified medical suppliers in our healthcare directory.`,
+    alternates: {
+      canonical: canonicalUrl,
+    },
+    openGraph: {
+      title: `${productName} by ${brandName}: Pricing and Specs`,
+      description: `Get pricing and specs for ${productName} by ${brandName}. Compare wholesale costs and availability from verified medical suppliers in our healthcare directory.`,
+      images: [
+        {
+          url: clinic.image_url || "/og-image.png",
+          width: 1200,
+          height: 630,
+          alt: `${productName} product image`,
+        },
+      ],
+    },
+  };
+}

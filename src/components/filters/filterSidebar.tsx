@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Sliders, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { SearchFilters } from "@/lib/types";
@@ -11,6 +10,8 @@ import { PractitionerFilters } from "@/components/filters/PractitionerFilters";
 import { ProductFilters } from "@/components/filters/ProductFilters";
 import { useSearchStore } from "@/app/stores/datastore";
 import {usePathname, useRouter } from "next/navigation";
+import { trackSearchUsage } from "@/lib/tracking/client";
+import { IconAdjustments, IconX } from "@tabler/icons-react";
 interface AdvancedFiltersProps {
   pageType?: string
 }
@@ -40,6 +41,7 @@ const defaultPractitionerFilters = {
   practitioner_qualifications: "all",
   City: "all",
   rating: "all",
+  accreditation: "all",
   query: "",
 };
 
@@ -65,6 +67,7 @@ const createPractitionerFiltersFromSearchFilters = (filters: SearchFilters) => (
   practitioner_qualifications: filters.category || "all",
   City: filters.location || "all",
   rating: filters.rating > 0 ? String(filters.rating) : "all",
+  accreditation: filters.accreditation || "all",
   query: filters.query || "",
 });
 
@@ -83,7 +86,7 @@ const createTreatmentFiltersFromSearchFilters = (filters: SearchFilters) => ({
   treatmentArea: filters.location || "all",
 });
 
-type LocalFilterTarget = "services" | "location" | "rating" | "category";
+type LocalFilterTarget = "services" | "location" | "rating" | "category" | "accreditation";
 
 interface LocalFilterRule {
   readonly key: string;
@@ -135,6 +138,12 @@ const practitionerLocalFilterRules: readonly LocalFilterRule[] = [
   {
     key: "practitioner_qualifications",
     target: "category",
+    whenSet: (value) => value,
+    whenAll: "",
+  },
+  {
+    key: "accreditation",
+    target: "accreditation",
     whenSet: (value) => value,
     whenAll: "",
   },
@@ -200,6 +209,14 @@ const applyLocalFilterRules = (
       };
     }
 
+    if (rule.target === "accreditation") {
+      return {
+        ...prev,
+        query: nextQuery,
+        accreditation: resolvedValue as SearchFilters["accreditation"],
+      };
+    }
+
     return {
       ...prev,
       query: nextQuery,
@@ -234,6 +251,7 @@ export function AdvancedFilterSidebar({ pageType }: AdvancedFiltersProps) {
     location: "",
     rating: 0,
     services: [],
+    accreditation: "",
   });
 
   const [treatmentFilters, setTreatmentFilters] = useState(
@@ -295,24 +313,34 @@ export function AdvancedFilterSidebar({ pageType }: AdvancedFiltersProps) {
       updatedFilters.location =
         treatmentFilters.treatmentArea !== "all" ? treatmentFilters.treatmentArea : "";
     } else if (filters.type === "Clinic") {
-      updatedFilters.query = clinicFilters.query || "";
+      updatedFilters.query = (clinicFilters.query || "").trim();
       updatedFilters.services = clinicFilters.servicesOffered !== "all" ? [clinicFilters.servicesOffered] : [];
       updatedFilters.location = clinicFilters.location !== "all" ? clinicFilters.location : "";
       updatedFilters.rating = clinicFilters.rating !== "all" ? Number(clinicFilters.rating) : 0;
     } else if (filters.type === "Practitioner") {
-      updatedFilters.query = practitionerFilters.query || "";
+      updatedFilters.query = (practitionerFilters.query || "").trim();
       updatedFilters.services = practitionerFilters.practitioner_specialty !== "all" ? [practitionerFilters.practitioner_specialty] : [];
       updatedFilters.location = practitionerFilters.City !== "all" ? practitionerFilters.City : "";
       updatedFilters.rating = practitionerFilters.rating !== "all" ? Number(practitionerFilters.rating) : 0;
       updatedFilters.category = practitionerFilters.practitioner_qualifications !== "all" ? practitionerFilters.practitioner_qualifications : "";
+      updatedFilters.accreditation = practitionerFilters.accreditation !== "all" ? practitionerFilters.accreditation : "";
     } else if (filters.type === "Product") {
-      updatedFilters.query = productFilters.query || "";
+      updatedFilters.query = (productFilters.query || "").trim();
       updatedFilters.services = productFilters.product_category !== "all" ? [productFilters.product_category] : [];
       updatedFilters.category = productFilters.brand !== "all" ? productFilters.brand : "";
       updatedFilters.location = productFilters.distributor_cleaned !== "all" ? productFilters.distributor_cleaned : "";
     }
     
     setFilters(updatedFilters);
+    void trackSearchUsage({
+      query: updatedFilters.query,
+      type: updatedFilters.type,
+      category: updatedFilters.category,
+      location: updatedFilters.location,
+      trigger: "filter",
+      destination: "search_results",
+      destinationPath: "/search",
+    });
 
     if (pathname !== "/search") {
       Router.push("/search");
@@ -369,14 +397,15 @@ export function AdvancedFilterSidebar({ pageType }: AdvancedFiltersProps) {
             className="w-full mt-4 bg-transparent rounded-full border-black border text-black hover:bg-transparent"
           >
             Filters
-            <Sliders className="h-4 w-4 ml-2" />
+            <IconAdjustments stroke={1.5} className="h-4 w-4 ml-2" />
           </Button>
         </div>
         <Card
           className={`
-          bg-transparent h-[460px] shadow-none border border-transparent rounded-0 pb-[145px] px-4 md:px-0 md:py-0 relative
-          md:relative md:block md:h-auto w-full md:bg-transparent md:translate-x-0
-          fixed top-0 left-0 bg-white z-[1] transition-transform duration-300 ease-in-out
+          bg-transparent h-dvh md:h-auto shadow-none border border-transparent rounded-0 px-4 md:px-0 md:py-0
+          md:flex md:flex-col md:relative md:block w-full md:translate-x-0
+          md:bg-white md:rounded-lg md:border md:border-[#C4C4C4] md:p-4 md:sticky md:top-4 md:self-start md:z-0
+          fixed top-0 left-0 bg-white z-[99999] transition-transform duration-300 ease-in-out
           ${isFilterActive ? "translate-x-0" : "-translate-x-full"} ${isOpen ? "block" : "hidden"}
         `}
         >
@@ -385,62 +414,71 @@ export function AdvancedFilterSidebar({ pageType }: AdvancedFiltersProps) {
               type="button"
               variant="ghost"
               size="sm"
-              className="inline-flex md:hidden p-2"
+              className="inline-flex md:hidden p-2 text-gray-500 hover:text-gray-600"
               onClick={() => onToggle()}
             >
-              <X className="w-4 h-4 text-medium" />
+              <IconX stroke={1.5} className="w-4 h-4" />
             </Button>
           </CardHeader>
 
-          <CardContent className="p-0 w-full h-full space-y-4 static">
-            {filters.type === "Treatments" && (
-              <TreatmentForm
-                filters={treatmentFilters}
-                onChange={handleTreatmentFilterChange}
-                onClear={() => {
-                  setTreatmentFilters(defaultTreatmentFilters);
-                  setFilters(createEmptySearchFilters());
-                }}
-              />
-            )}
+          <CardContent className="p-0 w-full flex-1 min-h-0 flex flex-col">
+            <div className="space-y-4 flex-1 overflow-y-auto md:overflow-visible min-h-0 pr-1 pb-4">
+              {filters.type === "Treatments" && (
+                <TreatmentForm
+                  filters={treatmentFilters}
+                  onChange={handleTreatmentFilterChange}
+                  onClear={() => {
+                    setTreatmentFilters(defaultTreatmentFilters);
+                    setFilters(createEmptySearchFilters());
+                  }}
+                />
+              )}
 
-            {filters.type === "Clinic" && (
-              <ClinicFilters
-                filters={clinicFilters}
-                onChange={handleClinicFilterChange}
-                onClear={() => {
-                  setClinicFilters(defaultClinicOnClearFilters);
-                  setFilters(createEmptySearchFilters());
-                }}
-                setIsFilterActive={setIsFilterActive}
-              />
-            )}
+              {filters.type === "Clinic" && (
+                <ClinicFilters
+                  filters={clinicFilters}
+                  onChange={handleClinicFilterChange}
+                  onClear={() => {
+                    setClinicFilters(defaultClinicOnClearFilters);
+                    setFilters(createEmptySearchFilters());
+                  }}
+                  setIsFilterActive={setIsFilterActive}
+                />
+              )}
 
-            {filters.type === "Practitioner" && (
-              <PractitionerFilters
-                filters={practitionerFilters}
-                onChange={handlePractitionerFilterChange}
-                onClear={() => {
-                  setPractitionerFilters(defaultPractitionerFilters);
-                  setFilters(createEmptySearchFilters());
-                }}
-                setIsFilterActive={setIsFilterActive}
-              />
-            )}
+              {filters.type === "Practitioner" && (
+                <PractitionerFilters
+                  filters={practitionerFilters}
+                  onChange={handlePractitionerFilterChange}
+                  onClear={() => {
+                    setPractitionerFilters(defaultPractitionerFilters);
+                    setFilters(createEmptySearchFilters());
+                  }}
+                  setIsFilterActive={setIsFilterActive}
+                />
+              )}
 
-            {filters.type === "Product" && (
-              <ProductFilters
-                filters={productFilters}
-                onChange={handleProductFilterChange}
-                onClear={() => {
-                  setProductFilters(defaultProductFilters);
-                  setFilters(createEmptySearchFilters());
-                }}
-                setIsFilterActive={setIsFilterActive}
-              />
-            )}
+              {filters.type === "Product" && (
+                <ProductFilters
+                  filters={productFilters}
+                  onChange={handleProductFilterChange}
+                  onClear={() => {
+                    setProductFilters(defaultProductFilters);
+                    setFilters(createEmptySearchFilters());
+                  }}
+                  setIsFilterActive={setIsFilterActive}
+                />
+              )}
+            </div>
 
-            <div className="bg-white md:bg-transparent space-y-2 px-4 w-full absolute py-2 md:py-0 md:px-0 md:static bottom-0 left-0 righ-0">
+            <div className="shrink-0 space-y-2 pt-2 border-t border-gray-100">
+              <Button
+                variant="outline"
+                onClick={handleClearFilters}
+                className="w-full border border-black bg-transparent text-black hover:bg-white hover:text-black hover:cursor-pointer"
+              >
+                Clear All
+              </Button>
               <Button
                 variant="default"
                 onClick={handleApplyFilters}

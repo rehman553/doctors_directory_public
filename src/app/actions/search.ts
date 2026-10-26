@@ -1,57 +1,136 @@
 'use server'
 import { cache } from "react";
 import { Clinic, Practitioner, Product, SearchFilters } from "@/lib/types"
-import clinicsJson from "../../../public/clinics_processed_new_data.json";
-import practitionersJson from "../../../public/derms_processed_new_5403.json";
-import productsJson from "../../../public/products_processed_new.json";
-import { modalities } from "@/lib/data";
-export const loadData = cache(() => {
-  const clinicsData = clinicsJson as unknown as Clinic[];
-  const practitionersData = practitionersJson as unknown as Practitioner[];
-  const productsData = productsJson as unknown as Product[];
-  const treatments = modalities;
-  const clinics = clinicsData.map(
-    (
-      clinic,
-    ): Pick<Clinic, "slug" | "City" | "image" | "category" | "gmapsAddress" | "Treatments" | "rating" | "reviewCount" | "isCQC" | "isHIW" | "isJCCP" | "isDoctor" | "isHIS" | "isRQIA" | "isSaveFace"> => ({
-      slug: clinic.slug,
-      image: clinic.image,
-      category: clinic.category,
-      gmapsAddress: clinic.gmapsAddress,
-      Treatments: clinic.Treatments,
-      rating: clinic.rating,
-      reviewCount: clinic.reviewCount,
-      isCQC: clinic.isCQC,
-      isHIW: clinic.isHIW,
-      isHIS: clinic.isHIS,
-      isJCCP: clinic.isJCCP,
-      isDoctor: clinic.isDoctor,
-      isSaveFace: clinic.isSaveFace,
-      isRQIA: clinic.isRQIA,
-      City: clinic.City,
-    }),
-  );
-  const clinicIndex = new Map(
-  clinics.map(c => [c.slug, c])
-)
+import { getAllClinicsForSearch, searchClinicsForListing, type SearchClinic } from "@/lib/data-access/clinics"
+import { getAllTreatmentNames, getAllTreatmentOptions } from "@/lib/data-access/treatments"
+import { getAllProducts as getAllProductsFromDb, searchProductsForListing } from "@/lib/data-access/products"
+import { getAllPractitionersForSearch, searchPractitionersForListing } from "@/lib/data-access/practitioners"
+import { modalities } from "@/lib/data"
+import { getCachedSearchData, setCachedSearchData } from "@/lib/search-cache"
+import { isConsentzClinicSlug, isConsentzLinked } from "@/lib/consentz-customers"
+import { applyPrestigeToClinic } from "@/lib/prestige-accreditations"
 
+const modalitiesSet = new Set(modalities.map((m) => m.toLowerCase()))
 
-  const practitioners = practitionersData
-  .map(p => {
-    const clinic = clinicIndex.get(JSON.parse(p.Associated_Clinics!)[0])
-    
-    if (!clinic) return null
-    return {
-      ...clinic,
-      practitioner_name: p.practitioner_name,
-      practitioner_title: p.practitioner_title,
-      practitioner_qualifications: p.practitioner_qualifications,
-      practitioner_awards: p.practitioner_awards,
-    }
-  
-  })
-  .filter(Boolean)
+type SearchClinicResult = Pick<
+  Clinic,
+  | "slug"
+  | "image"
+  | "rating"
+  | "reviewCount"
+  | "category"
+  | "gmapsAddress"
+  | "City"
+  | "isSaveFace"
+  | "isDoctor"
+  | "isJCCP"
+  | "isCQC"
+  | "isHIW"
+  | "isHIS"
+  | "isRQIA"
+  | "Treatments"
+  | "claimed"
+  | "isConsentz"
+  | "verified"
+  | "idVerified"
+  | "manualVerified"
+  | "aestheticsAwards"
+  | "tatlerGuideYears"
+  | "awardsBadgeLabel"
+  | "tatlerBadgeLabel"
+>;
 
+type SearchPractitioner = SearchClinicResult &
+  Pick<
+    Practitioner,
+    | "practitioner_name"
+    | "practitioner_title"
+    | "practitioner_qualifications"
+    | "practitioner_awards"
+  >;
+
+// Helper to convert database clinic to old format for compatibility
+function convertDbClinicToOldFormat(clinic: SearchClinic): SearchClinicResult {
+  return applyPrestigeToClinic({
+    slug: clinic.slug || undefined,
+    image: clinic.image || '',
+    rating: clinic.rating ? Number(clinic.rating) : 0,
+    reviewCount: clinic.reviewCount || 0,
+    category: clinic.category || '',
+    gmapsAddress: clinic.gmapsAddress || '',
+    City: clinic.City || '',
+    isSaveFace: clinic.isSaveFace,
+    isDoctor: clinic.isDoctor,
+    isJCCP: clinic.isJccp ? [clinic.isJccp, ''] : null,
+    isCQC: clinic.isCqc ? [clinic.isCqc, ''] : null,
+    isHIW: clinic.isHiw ? [clinic.isHiw, ''] : null,
+    isHIS: clinic.isHis ? [clinic.isHis, ''] : null,
+    isRQIA: clinic.isRqia ? [clinic.isRqia, ''] : null,
+    Treatments: clinic.Treatments || [],
+    claimed: clinic.claimed ?? false,
+    isConsentz: isConsentzClinicSlug(clinic.slug),
+    verified: clinic.verified ?? false,
+    idVerified: clinic.idVerified ?? false,
+    manualVerified: clinic.manualVerified ?? false,
+  }) as SearchClinicResult
+}
+
+type LoadDataResult = {
+  clinics: SearchClinicResult[]
+  practitioners: SearchPractitioner[]
+  products: Pick<Product, "category" | "product_name" | "brand" | "manufacturer" | "distributor_cleaned" | "image_url" | "slug">[]
+  treatments: string[]
+}
+
+function mapPractitionersForSearch(practitionersFromDb: Practitioner[]): SearchPractitioner[] {
+  return practitionersFromDb.map((p) => ({
+    slug: p.slug,
+    image: p.image || '',
+    rating: typeof p.rating === 'number' ? p.rating : 0,
+    reviewCount: p.reviewCount || 0,
+    category: p.category || '',
+    gmapsAddress: p.gmapsAddress || '',
+    City: p.City || '',
+    isSaveFace: p.isSaveFace ?? false,
+    isDoctor: p.isDoctor ?? false,
+    isJCCP: p.isJCCP ?? null,
+    isCQC: p.isCQC ?? null,
+    isHIW: p.isHIW ?? null,
+    isHIS: p.isHIS ?? null,
+    isRQIA: p.isRQIA ?? null,
+    Treatments: p.Treatments || [],
+    practitioner_name: p.practitioner_name,
+    practitioner_title: p.practitioner_title,
+    practitioner_qualifications: p.practitioner_qualifications,
+    practitioner_awards: p.practitioner_awards,
+  }))
+}
+
+// Treatment names used by search's Treatments tab — modality-filtered subset of
+// getAllTreatmentNames(). Kept separate from loadData() so the Treatments tab doesn't
+// have to pull clinics/practitioners/products just to filter this string array.
+const getTreatmentsForSearch = cache(async (): Promise<string[]> => {
+  const allTreatments = await getAllTreatmentNames()
+  return allTreatments.filter((t) => modalitiesSet.has(t.toLowerCase()))
+})
+
+// Bundled dataset used by getSearchDiscoveryData(), which genuinely needs clinics,
+// practitioners, and products together to build cross-type suggestions. searchPractitioners()
+// no longer routes through this for Treatments/Practitioner — see getTreatmentsForSearch()
+// and the direct getAllPractitionersForSearch() call below.
+export const loadData = cache(async (): Promise<LoadDataResult> => {
+  const cached = await getCachedSearchData<LoadDataResult>()
+  if (cached) return cached
+
+  const [clinicsDataFromDb, practitionersFromDb, productsData, treatments] = await Promise.all([
+    getAllClinicsForSearch(),
+    getAllPractitionersForSearch(),
+    getAllProductsFromDb(),
+    getTreatmentsForSearch(),
+  ])
+
+  const clinics = clinicsDataFromDb.map(convertDbClinicToOldFormat);
+  const practitioners = mapPractitionersForSearch(practitionersFromDb);
 
   const products = productsData.map(
     (
@@ -67,97 +146,83 @@ export const loadData = cache(() => {
     }),
   );
 
-  return { clinics, practitioners, products, treatments };
+  const result: LoadDataResult = { clinics, practitioners, products, treatments };
+  await setCachedSearchData(result);
+  return result;
 });
 
-
-
-
+export const getTreatmentSearchOptions = cache(async () => {
+  return await getAllTreatmentOptions()
+})
 
 
 const ITEMS_PER_PAGE = 9
+
+function paginatedResult<T>(data: T[], totalCount: number, page: number) {
+  return {
+    data,
+    totalCount,
+    totalPages: Math.ceil(totalCount / ITEMS_PER_PAGE),
+    currentPage: page,
+  }
+}
 
 export async function searchPractitioners(
   filters: SearchFilters,
   page: number = 1,
   sortBy: string = "default"
 ) {
-  const { clinics, practitioners, products, treatments } = await loadData();
+  const skip = (page - 1) * ITEMS_PER_PAGE
 
-  const start = performance.now();
-  
-  let filtered: any[] = []
-  
+  // Clinic, Product and Practitioner are filtered/paginated directly in MySQL (indexed WHERE +
+  // LIMIT) instead of fetching the entire table and filtering in JS — see searchClinicsForListing /
+  // searchProductsForListing / searchPractitionersForListing for the DB-side equivalent of the
+  // filter logic below (Treatments stays JS-side: only ~90 rows, not worth pushing down).
   if (filters.type === "Clinic") {
-    filtered = ( clinics).filter((clinic) => {
-
-      if (filters.query) {
-        const queryWords = filters.query.toLowerCase().split(/\s+/).filter(word => word.length > 0)
-        const searchableText = [
-          clinic.slug,
-          clinic.category,
-          clinic.gmapsAddress,
-          ...(clinic.Treatments || []),
-        ].join(" ").toLowerCase()
-        const hasAllWords = queryWords.every(word => searchableText.includes(word))
-        if (!hasAllWords) return false
-      }
-
-      if (filters.category && filters.category !== "All Categories") {
-        if (clinic.category !== filters.category) return false
-      }
-
-      if (filters.location) {
-        const location = filters.location.toLowerCase()
-        if (!clinic.gmapsAddress.toLowerCase().includes(location)) return false
-      }
-
-      if (filters.services.length > 0) {
-        const practitionerServices = clinic.Treatments || []
-        const hasMatchingService = filters.services.some((service) =>
-          practitionerServices.some((ps) => ps.includes(service.toLowerCase())),
-        )
-        if (!hasMatchingService) return false
-      }
-
-      if (filters.rating > 0) {
-        if (clinic.rating < filters.rating) return false
-      }
-
-      return true
+    const { clinics: rows, totalCount } = await searchClinicsForListing({
+      query: filters.query,
+      category: filters.category,
+      location: filters.location,
+      rating: filters.rating,
+      services: filters.services,
+      sortBy,
+      skip,
+      take: ITEMS_PER_PAGE,
     })
-  } else if (filters.type === "Product") {
-    filtered = ( products).filter((product) => {
-      if (filters.query) {
-        const queryWords = filters.query.toLowerCase().split(/\s+/).filter(word => word.length > 0)
-        const searchableText = [
-          product.product_name,
-          product.category,
-          product.brand,
-          product.manufacturer,
-        ].join(" ").toLowerCase()
-        const hasAllWords = queryWords.every(word => searchableText.includes(word))
-        if (!hasAllWords) return false
-      }
+    return paginatedResult(rows.map(convertDbClinicToOldFormat), totalCount, page)
+  }
 
-      if (filters.category && filters.category !== "All Categories") {
-        if (product.brand !== filters.category) return false
-      }
-
-      if (filters.location) {
-        if (product.distributor_cleaned !== filters.location) return false
-      }
-
-      if (filters.services.length > 0) {
-        const hasMatchingService = filters.services.some((service) =>
-          product.category.toLowerCase().includes(service.toLowerCase())
-        )
-        if (!hasMatchingService) return false
-      }
-
-      return true
+  if (filters.type === "Product") {
+    const { products: rows, totalCount } = await searchProductsForListing({
+      query: filters.query,
+      category: filters.category,
+      location: filters.location,
+      services: filters.services,
+      skip,
+      take: ITEMS_PER_PAGE,
     })
-  } else if (filters.type === "Treatments") {
+    return paginatedResult(rows, totalCount, page)
+  }
+
+  if (filters.type === "Practitioner") {
+    const { practitioners: rows, totalCount } = await searchPractitionersForListing({
+      query: filters.query,
+      category: filters.category,
+      location: filters.location,
+      services: filters.services,
+      rating: filters.rating,
+      accreditation: filters.accreditation,
+      sortBy,
+      skip,
+      take: ITEMS_PER_PAGE,
+    })
+    return paginatedResult(mapPractitionersForSearch(rows), totalCount, page)
+  }
+
+  let filtered: any[] = []
+
+  if (filters.type === "Treatments") {
+    const treatments = await getTreatmentsForSearch()
     filtered = ( treatments).filter((treatment: string) => {
       if (filters.query) {
         const queryWords = filters.query.toLowerCase().split(/\s+/).filter(word => word.length > 0)
@@ -198,7 +263,7 @@ export async function searchPractitioners(
         if (!hasMatchingType) return false
       }
 
-      if (filters.location) {
+      if (filters.location?.trim()) {
         const treatmentAreaMapping = {
           "face": ["Anti Wrinkle Treatment", "Botox", "Fillers", "Chemical Peel", "Cheek Enhancement", "Chin Enhancement", "Lips", "Marionettes", "Tear Trough Treatment"],
           "body": ["CoolSculpting", "Liposuction", "Breast Augmentation", "Aqualyx", "Lymphatic Drainage"],
@@ -207,7 +272,7 @@ export async function searchPractitioners(
           "lips": ["Lips", "Fillers"],
         }
 
-        const area = filters.location.toLowerCase()
+        const area = filters.location.trim().toLowerCase()
         const mappedTreatments = treatmentAreaMapping[area as keyof typeof treatmentAreaMapping] || []
         const hasMatchingArea = mappedTreatments.some((mappedTreatment) =>
           treatment.toLowerCase().includes(mappedTreatment.toLowerCase()) ||
@@ -215,44 +280,6 @@ export async function searchPractitioners(
         ) || treatment.toLowerCase().includes(area)
 
         if (!hasMatchingArea) return false
-      }
-
-      return true
-    })
-  } else if (filters.type === 'Practitioner') {
-    filtered = ( practitioners).filter((practitioner) => {
-      if (filters.query) {
-        
-        const queryWords = filters.query.toLowerCase().split(/\s+/).filter(word => word.length > 0)
-        const searchableText = [
-          practitioner?.practitioner_name,
-          practitioner?.practitioner_qualifications?.toLowerCase(),
-          practitioner?.category,
-          practitioner?.gmapsAddress,
-          practitioner?.practitioner_awards?.toLowerCase(),
-          ...(practitioner?.Treatments || []),
-        ].join(" ").toLowerCase()
-        const hasAllWords = queryWords.every(word => searchableText.includes(word))
-        if (!hasAllWords) return false
-      }
-
-      if (filters.category && filters.category !== "All Categories") {
-        if (!practitioner?.practitioner_qualifications?.toLowerCase().includes(filters.category.toLowerCase())) return false  
-      }
-
-      if (filters.location) {
-        const location = filters.location.toLowerCase()
-        if (!practitioner?.gmapsAddress.toLowerCase().includes(location)) return false
-      }
-
-      if (filters.services.length > 0) {
-        const service = filters.services[0]
-        if(!practitioner?.practitioner_title?.toLowerCase().includes(service.toLowerCase())) return false
-        
-      }
-
-      if (filters.rating > 0) {
-        if (practitioner!.rating < filters.rating) return false
       }
 
       return true
@@ -269,16 +296,154 @@ export async function searchPractitioners(
         return 0
     }
   })
-  const end = performance.now();
-  const totalCount = filtered.length
-  const totalPages = Math.ceil(totalCount / ITEMS_PER_PAGE)
-  const startIndex = (page - 1) * ITEMS_PER_PAGE
-  const paginatedData = filtered.slice(startIndex, startIndex + ITEMS_PER_PAGE)
+  const paginatedData = filtered.slice(skip, skip + ITEMS_PER_PAGE)
+
+  return paginatedResult(paginatedData, filtered.length, page)
+}
+
+export async function getSearchDiscoveryData(filters: SearchFilters) {
+  const { clinics, practitioners, products } = await loadData();
+
+  const normalizedQuery = filters.query.trim().toLowerCase();
+  const normalizedLocation = filters.location.trim().toLowerCase();
+  const normalizedServices = filters.services.map((service) => service.toLowerCase());
+
+  const clinicScore = (clinic: typeof clinics[number]) => {
+    let score = 0;
+    const searchable = [
+      clinic.slug,
+      clinic.category,
+      clinic.gmapsAddress,
+      ...(clinic.Treatments || []),
+    ].join(" ").toLowerCase();
+
+    if (!normalizedQuery || searchable.includes(normalizedQuery)) {
+      score += normalizedQuery ? 3 : 1;
+    }
+
+    if (!normalizedLocation || clinic.gmapsAddress.toLowerCase().includes(normalizedLocation)) {
+      score += normalizedLocation ? 2 : 1;
+    }
+
+    if (
+      normalizedServices.length === 0 ||
+      normalizedServices.some((service) =>
+        (clinic.Treatments || []).some((treatment) => treatment.includes(service))
+      )
+    ) {
+      score += normalizedServices.length > 0 ? 2 : 1;
+    }
+
+    return score;
+  };
+
+  const practitionerScore = (practitioner: typeof practitioners[number]) => {
+    let score = 0;
+    const searchable = [
+      practitioner.practitioner_name,
+      practitioner.practitioner_title,
+      practitioner.practitioner_qualifications,
+      practitioner.practitioner_awards,
+      practitioner.gmapsAddress,
+      ...(practitioner.Treatments || []),
+    ].join(" ").toLowerCase();
+
+    if (!normalizedQuery || searchable.includes(normalizedQuery)) {
+      score += normalizedQuery ? 3 : 1;
+    }
+
+    if (!normalizedLocation || String(practitioner.gmapsAddress).toLowerCase().includes(normalizedLocation)) {
+      score += normalizedLocation ? 2 : 1;
+    }
+
+    if (
+      normalizedServices.length === 0 ||
+      normalizedServices.some((service) => searchable.includes(service))
+    ) {
+      score += normalizedServices.length > 0 ? 2 : 1;
+    }
+
+    return score;
+  };
+
+  const suggestedClinics = [...clinics]
+    .map((clinic) => ({ clinic, score: clinicScore(clinic) }))
+    .filter(({ score }) => score > 0)
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        Number(Boolean(right.clinic.isConsentz)) - Number(Boolean(left.clinic.isConsentz)) ||
+        right.clinic.reviewCount - left.clinic.reviewCount ||
+        right.clinic.rating - left.clinic.rating
+    )
+    .slice(0, 6)
+    .map(({ clinic }) => clinic);
+
+  const suggestedPractitioners = [...practitioners]
+    .map((practitioner) => ({ practitioner, score: practitionerScore(practitioner) }))
+    .filter(({ score }) => score > 0)
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        Number(isConsentzLinked(right.practitioner)) - Number(isConsentzLinked(left.practitioner)) ||
+        right.practitioner.reviewCount - left.practitioner.reviewCount ||
+        right.practitioner.rating - left.practitioner.rating
+    )
+    .slice(0, 6)
+    .map(({ practitioner }) => practitioner);
+
+  const suggestedProducts = [...products]
+    .map((product) => {
+      const searchable = [
+        product.product_name,
+        product.brand,
+        product.manufacturer,
+        product.category,
+      ].join(" ").toLowerCase();
+
+      let score = 0;
+      if (!normalizedQuery || searchable.includes(normalizedQuery)) {
+        score += normalizedQuery ? 3 : 1;
+      }
+
+      if (
+        normalizedServices.length === 0 ||
+        normalizedServices.some((service) => searchable.includes(service))
+      ) {
+        score += normalizedServices.length > 0 ? 2 : 1;
+      }
+
+      if (!filters.category || filters.category === "All Categories" || searchable.includes(filters.category.toLowerCase())) {
+        score += filters.category && filters.category !== "All Categories" ? 2 : 1;
+      }
+
+      return { product, score };
+    })
+    .filter(({ score }) => score > 0)
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        left.product.product_name.localeCompare(right.product.product_name)
+    )
+    .slice(0, 6)
+    .map(({ product }) => product);
+
+  const treatmentCounts = new Map<string, number>();
+  for (const clinic of clinics) {
+    for (const treatment of clinic.Treatments || []) {
+      treatmentCounts.set(treatment, (treatmentCounts.get(treatment) ?? 0) + 1);
+    }
+  }
+
+  const popularTreatments = [...treatmentCounts.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 15)
+    .map(([treatment]) => treatment);
 
   return {
-    data: paginatedData,
-    totalCount,
-    totalPages,
-    currentPage: page
-  }
+    suggestedClinics,
+    suggestedPractitioners,
+    suggestedProducts,
+    popularTreatments,
+  };
 }

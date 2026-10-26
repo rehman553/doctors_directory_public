@@ -1,0 +1,572 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+import { useRouter, useParams } from 'next/navigation'
+import { toast } from 'sonner'
+import { IconArrowNarrowLeft, IconBuildingHospital, IconExternalLink,  IconFileText, IconWand, IconSparkles, IconDeviceFloppy, IconShieldCheck, IconShare3, IconStar, IconLink, IconMapPin } from '@tabler/icons-react';
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { ImageUpload } from '@/components/admin/ImageUpload'
+import { Textarea } from '@/components/ui/textarea'
+import { Checkbox } from '@/components/ui/checkbox'
+import { FormSection, Field } from './FormSection'
+import { CityCombobox } from './city-combobox'
+import { cn } from '@/lib/utils'
+
+type ClinicData = {
+  slug: string
+  citySlug: string | null
+  name: string | null
+  image: string | null
+  gmapsUrl: string | null
+  gmapsAddress: string | null
+  gmapsPhone: string | null
+  category: string | null
+  rating: number | null
+  reviewCount: number | null
+  aboutSection: string | null
+  accreditations: string | null
+  awards: string | null
+  affiliations: string | null
+  website: string | null
+  email: string | null
+  facebook: string | null
+  twitter: string | null
+  xTwitter: string | null
+  instagram: string | null
+  youtube: string | null
+  linkedin: string | null
+  isSaveFace: boolean
+  isDoctor: boolean
+  isJccp: boolean | null
+  jccpUrl: string | null
+  isCqc: boolean | null
+  cqcUrl: string | null
+  isHiw: boolean | null
+  hiwUrl: string | null
+  isHis: boolean | null
+  hisUrl: string | null
+  isRqia: boolean | null
+  rqiaUrl: string | null
+  coverImage: string | null
+  cqcStatus: 'not_applicable' | 'good' | 'requires_improvement' | 'outstanding' | null
+  avgReplyTime: 'within_24hrs' | 'within_48hrs' | 'more_than_48hrs' | null
+  coreClinicId: number | null
+  consentzUsername: string | null
+  placeId: string | null
+}
+
+const EMPTY: ClinicData = {
+  slug: '', citySlug: null, name: null, image: null, gmapsUrl: null, gmapsAddress: null, gmapsPhone: null,
+  category: null, rating: null, reviewCount: null, aboutSection: null, accreditations: null,
+  awards: null, affiliations: null, website: null, email: null, facebook: null, twitter: null,
+  xTwitter: null, instagram: null, youtube: null, linkedin: null,
+  isSaveFace: false, isDoctor: false, isJccp: false, jccpUrl: null, isCqc: false, cqcUrl: null,
+  isHiw: false, hiwUrl: null, isHis: false, hisUrl: null, isRqia: false, rqiaUrl: null,
+  coverImage: null, cqcStatus: null, avgReplyTime: null, coreClinicId: null, consentzUsername: null,
+  placeId: null,
+}
+
+// Converts stored Python-list / JSON-array strings to newline-separated display text
+function parseStoredList(val: string | null | undefined): string {
+  if (!val || val === '[]' || val === "['']" || val === '[""]') return ''
+  try {
+    if (val.startsWith('[') && val.endsWith(']')) {
+      const parsed = JSON.parse(val.replaceAll("'", '"'))
+      if (Array.isArray(parsed)) return parsed.filter(Boolean).join('\n')
+    }
+  } catch {
+    // unparseable — return as-is so nothing is lost
+  }
+  return val
+}
+
+// Converts newline-separated textarea text back to a JSON array string for storage
+function formatListForSave(val: string | null | undefined): string | null {
+  const lines = (val ?? '').split('\n').map((l) => l.trim()).filter(Boolean)
+  return lines.length > 0 ? JSON.stringify(lines) : null
+}
+
+const REG_FLAGS = [
+  { key: 'isJccp' as const, urlKey: 'jccpUrl' as const, label: 'JCCP' },
+  { key: 'isCqc' as const, urlKey: 'cqcUrl' as const, label: 'CQC' },
+  { key: 'isHiw' as const, urlKey: 'hiwUrl' as const, label: 'HIW' },
+  { key: 'isHis' as const, urlKey: 'hisUrl' as const, label: 'HIS' },
+  { key: 'isRqia' as const, urlKey: 'rqiaUrl' as const, label: 'RQIA' },
+]
+
+interface ClinicFormProps {
+  /** Override the fetch/save URL (portal use: '/directory/api/portal/clinic'). Omit for admin (auto-computed from slug). */
+  fetchUrl?: string
+  saveUrl?: string
+  /** Portal mode: hides slug display, rating/review count, and regulatory flags. */
+  mode?: 'portal'
+  /** When true, all fields are locked (e.g. pending ID verification). */
+  disabled?: boolean
+  /** Called after a successful save instead of navigating back to /admin/clinics. */
+  onSaved?: () => void
+}
+
+export function ClinicForm({ fetchUrl, saveUrl, mode, disabled, onSaved }: ClinicFormProps = {}) {
+  const [data, setData] = useState<ClinicData>(EMPTY)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [isNew, setIsNew] = useState(false)
+  const [cityLabel, setCityLabel] = useState<string | null>(null)
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const router = useRouter()
+  const params = useParams()
+  const slug = (params?.slug as string) ?? ''
+  const isPortal = mode === 'portal'
+
+  useEffect(() => {
+    if (fetchUrl) {
+      fetch(fetchUrl)
+        .then((r) => { if (!r.ok) throw new Error(); return r.json() })
+        .then((d) => {
+          setData({ ...d, accreditations: parseStoredList(d.accreditations), awards: parseStoredList(d.awards), affiliations: parseStoredList(d.affiliations) })
+          setLoading(false)
+        })
+        .catch(() => setLoading(false))
+      return
+    }
+    if (slug === 'new') {
+      setIsNew(true)
+      setLoading(false)
+      return
+    }
+    fetch(`/directory/api/admin/clinics/${slug}/`)
+      .then((r) => { if (!r.ok) throw new Error(); return r.json() })
+      .then((d) => {
+        if (!d.name) {
+          d.name = d.slug.split('-').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+        }
+        setData({ ...d, accreditations: parseStoredList(d.accreditations), awards: parseStoredList(d.awards), affiliations: parseStoredList(d.affiliations) })
+        setCityLabel(d.cityName ?? null)
+        setLoading(false)
+      })
+      .catch(() => router.push('/admin/clinics'))
+  }, [fetchUrl, slug, router])
+
+  function set<K extends keyof ClinicData>(key: K, value: ClinicData[K]) {
+    setData((prev) => ({ ...prev, [key]: value }))
+    setFieldErrors((prev) => {
+      if (!prev[key as string]) return prev
+      const next = { ...prev }
+      delete next[key as string]
+      return next
+    })
+  }
+
+  async function handleSave() {
+    const nextErrors: Record<string, string> = {}
+    if (!data.name?.trim()) nextErrors.name = 'Clinic name is required'
+    if (isNew && !data.slug.trim()) nextErrors.slug = 'Slug is required'
+    else if (isNew && !/^[a-z0-9-]+$/.test(data.slug.trim())) {
+      nextErrors.slug = 'Slug must be kebab-case'
+    }
+    if (!isPortal && !data.citySlug?.trim()) nextErrors.citySlug = 'City is required'
+
+    if (Object.keys(nextErrors).length > 0) {
+      setFieldErrors(nextErrors)
+      toast.error('Please fix the highlighted fields')
+      return
+    }
+
+    setFieldErrors({})
+    setSaving(true)
+    const { slug: _s, ...rest } = data
+    const serialised = {
+      ...rest,
+      accreditations: formatListForSave(rest.accreditations),
+      awards: formatListForSave(rest.awards),
+      affiliations: formatListForSave(rest.affiliations),
+    }
+    const body = isNew ? { slug: data.slug.trim(), ...serialised } : serialised
+    const url = saveUrl ?? (isNew ? '/directory/api/admin/clinics/' : `/directory/api/admin/clinics/${slug}/`)
+    try {
+      const res = await fetch(url, {
+        method: isNew ? 'POST' : 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (res.ok) {
+        toast.success('Clinic saved')
+        if (onSaved) {
+          onSaved()
+        } else {
+          setTimeout(() => router.push('/admin/clinics'), 300)
+        }
+      } else {
+        const err = await res.json().catch(() => ({})) as {
+          error?: string
+          fieldErrors?: Record<string, string>
+        }
+        if (err.fieldErrors) setFieldErrors(err.fieldErrors)
+        toast.error(err.error || 'Failed to save')
+      }
+    } catch {
+      toast.error('Failed to save')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) return <LoadingSkeleton />
+
+  const title = isNew ? 'New Clinic' : (data.name || data.slug || 'Edit Clinic')
+
+  return (
+    <div className={cn('space-y-5', disabled && 'pointer-events-none opacity-60 select-none')}>
+      {/* Header */}
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3 min-w-0">
+          {!isPortal && (
+            <Button variant="ghost" size="sm" className="h-8 w-8 p-0 shrink-0" onClick={() => router.push('/admin/clinics')}>
+              <IconArrowNarrowLeft stroke={1.5} />
+            </Button>
+          )}
+          <div className="min-w-0">
+            {!isPortal && <p className="text-xs text-gray-600 font-medium">Clinics</p>}
+            <h2 className="text-3xl text-gray-900 truncate">{title}</h2>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {!isNew && (
+            <a
+              href={
+                data.citySlug
+                  ? `/directory/clinics/${data.citySlug}/clinic/${data.slug}`
+                  : `/directory/search?type=Clinic&q=${encodeURIComponent(data.name || data.slug)}`
+              }
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-disabled={disabled}
+              onClick={(e) => disabled && e.preventDefault()}
+              className={disabled ? 'pointer-events-none' : undefined}
+            >
+              <Button variant="outline" size="lg" disabled={disabled}>
+                <IconExternalLink stroke={1.5} className="h-3.5 w-3.5 mr-1.5" />
+                Preview
+              </Button>
+            </a>
+          )}
+          <Button size="lg" onClick={handleSave} disabled={saving || disabled}>
+            <IconDeviceFloppy stroke={1.5} className="h-3.5 w-3.5 mr-1.5" />
+            {saving ? 'Saving…' : 'Save'}
+          </Button>
+        </div>
+      </div>
+
+      {/* Basic Info */}
+      <FormSection title="Basic Info" icon={IconBuildingHospital}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <Field label="Clinic Name" required error={fieldErrors.name}>
+            <div className="flex gap-2">
+              <Input
+                value={data.name ?? ''}
+                onChange={(e) => {
+                  set('name', e.target.value || null)
+                  if (isNew) {
+                    set('slug', e.target.value.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''))
+                  }
+                }}
+                placeholder="e.g. The Dermatology Clinic"
+                className={cn('flex-1', fieldErrors.name && 'border-red-500 focus-visible:ring-red-500')}
+                aria-invalid={Boolean(fieldErrors.name)}
+              />
+              {!data.name && data.slug && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0 h-9"
+                  title="Fill name from slug"
+                  onClick={() => set('name', data.slug.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' '))}
+                >
+                  <IconWand stroke={1.5} className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </div>
+          </Field>
+          {!isPortal && (isNew ? (
+            <Field label="Slug" required hint="Auto-filled from name — editable" error={fieldErrors.slug}>
+              <Input
+                value={data.slug}
+                onChange={(e) => set('slug', e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+                placeholder="e.g. the-dermatology-clinic"
+                className={cn('font-mono', fieldErrors.slug && 'border-red-500 focus-visible:ring-red-500')}
+                aria-invalid={Boolean(fieldErrors.slug)}
+              />
+            </Field>
+          ) : (
+            <div className="flex flex-col justify-end">
+              <span className="text-xs text-gray-600 mb-1.5 font-medium">Slug</span>
+              <code className="text-sm bg-gray-50 text-gray-600 px-3 py-2 rounded-lg border border-gray-200 font-mono">{data.slug}</code>
+            </div>
+          ))}
+          <Field label="Category">
+            <Input value={data.category ?? ''} onChange={(e) => set('category', e.target.value || null)} placeholder="e.g. Aesthetics" />
+          </Field>
+          <Field label="Image" fullWidth>
+            <ImageUpload
+              value={data.image ?? null}
+              onChange={(url) => set('image', url)}
+              endpoint={isPortal ? '/directory/api/portal/upload/' : '/directory/api/admin/upload/'}
+            />
+          </Field>
+        </div>
+      </FormSection>
+
+      {/* Location & Contact */}
+      <FormSection title="Location & Contact" icon={IconMapPin}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <Field label="Address" fullWidth error={fieldErrors.gmapsAddress}>
+            <Input
+              value={data.gmapsAddress ?? ''}
+              onChange={(e) => set('gmapsAddress', e.target.value || null)}
+              placeholder="123 Harley Street, London"
+              maxLength={500}
+              className={cn(fieldErrors.gmapsAddress && 'border-red-500 focus-visible:ring-red-500')}
+              aria-invalid={Boolean(fieldErrors.gmapsAddress)}
+            />
+          </Field>
+          {!isPortal && (
+            <Field label="City" required error={fieldErrors.citySlug}>
+              <CityCombobox
+                onChange={(citySlug) => set('citySlug', citySlug)}
+                initialLabel={cityLabel}
+                invalid={Boolean(fieldErrors.citySlug)}
+              />
+            </Field>
+          )}
+          <Field label="Phone" error={fieldErrors.gmapsPhone}>
+            <Input
+              value={data.gmapsPhone ?? ''}
+              onChange={(e) => set('gmapsPhone', e.target.value || null)}
+              placeholder="+44 20 0000 0000"
+              maxLength={200}
+              className={cn(fieldErrors.gmapsPhone && 'border-red-500 focus-visible:ring-red-500')}
+              aria-invalid={Boolean(fieldErrors.gmapsPhone)}
+            />
+          </Field>
+          <Field label="Google Maps URL" error={fieldErrors.gmapsUrl}>
+            <Input
+              value={data.gmapsUrl ?? ''}
+              onChange={(e) => set('gmapsUrl', e.target.value || null)}
+              placeholder="https://maps.google.com/…"
+              className={cn(fieldErrors.gmapsUrl && 'border-red-500 focus-visible:ring-red-500')}
+              aria-invalid={Boolean(fieldErrors.gmapsUrl)}
+            />
+          </Field>
+          <Field label="Google Place ID" error={fieldErrors.placeId}>
+            <Input
+              value={data.placeId ?? ''}
+              onChange={(e) => set('placeId', e.target.value || null)}
+              placeholder="ChIJ… (powers the Google review link)"
+              maxLength={255}
+              className={cn(fieldErrors.placeId && 'border-red-500 focus-visible:ring-red-500')}
+              aria-invalid={Boolean(fieldErrors.placeId)}
+            />
+          </Field>
+          <Field label="Website" error={fieldErrors.website}>
+            <Input
+              value={data.website ?? ''}
+              onChange={(e) => set('website', e.target.value || null)}
+              placeholder="https://…"
+              maxLength={500}
+              className={cn(fieldErrors.website && 'border-red-500 focus-visible:ring-red-500')}
+              aria-invalid={Boolean(fieldErrors.website)}
+            />
+          </Field>
+          <Field label="Email" error={fieldErrors.email}>
+            <Input
+              type="email"
+              value={data.email ?? ''}
+              onChange={(e) => set('email', e.target.value || null)}
+              placeholder="info@clinic.com"
+              maxLength={255}
+              className={cn(fieldErrors.email && 'border-red-500 focus-visible:ring-red-500')}
+              aria-invalid={Boolean(fieldErrors.email)}
+            />
+          </Field>
+        </div>
+      </FormSection>
+
+      {/* Reputation — rating/reviewCount are admin-managed; portal users only edit About */}
+      <FormSection title={isPortal ? 'About' : 'Reputation'} icon={IconStar}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          {!isPortal && (
+            <>
+              <Field label="Rating">
+                <Input type="number" min={0} max={5} step={0.1} value={data.rating ?? ''} onChange={(e) => set('rating', e.target.value ? Number(e.target.value) : null)} placeholder="4.8" />
+              </Field>
+              <Field label="Review Count">
+                <Input type="number" min={0} value={data.reviewCount ?? ''} onChange={(e) => set('reviewCount', e.target.value ? Number(e.target.value) : null)} placeholder="124" />
+              </Field>
+            </>
+          )}
+          <Field label="About" fullWidth>
+            <Textarea value={data.aboutSection ?? ''} onChange={(e) => set('aboutSection', e.target.value || null)} placeholder="Brief description of the clinic…" className="min-h-[100px]" />
+          </Field>
+        </div>
+      </FormSection>
+
+      {/* Profile Enhancements */}
+      <FormSection title="Profile" icon={IconSparkles}>
+        <div className="grid grid-cols-1 gap-5">
+          {!isPortal && (
+            <Field label="Cover Photo" fullWidth>
+              <ImageUpload value={data.coverImage ?? null} onChange={(url) => set('coverImage', url)} />
+            </Field>
+          )}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <Field label="CQC Status">
+              <select
+                value={data.cqcStatus ?? ''}
+                onChange={(e) => set('cqcStatus', (e.target.value || null) as ClinicData['cqcStatus'])}
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                <option value="">Not set</option>
+                <option value="not_applicable">N/A</option>
+                <option value="good">Good</option>
+                <option value="requires_improvement">Requires Improvement</option>
+                <option value="outstanding">Outstanding</option>
+              </select>
+            </Field>
+            <Field label="Avg Reply Time">
+              <select
+                value={data.avgReplyTime ?? ''}
+                onChange={(e) => set('avgReplyTime', (e.target.value || null) as ClinicData['avgReplyTime'])}
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                <option value="">Not set</option>
+                <option value="within_24hrs">Within 24 hours</option>
+                <option value="within_48hrs">Within 48 hours</option>
+                <option value="more_than_48hrs">More than 48 hours</option>
+              </select>
+            </Field>
+          </div>
+        </div>
+      </FormSection>
+
+      {/* Content */}
+      <FormSection title="Content" icon={IconFileText}>
+        <div className="grid grid-cols-1 gap-5">
+          <Field label="Accreditations" hint="One accreditation per line">
+            <Textarea value={data.accreditations ?? ''} onChange={(e) => set('accreditations', e.target.value || null)} placeholder={"CQC registered\nSave Face accredited\nJCCP member"} className="min-h-[80px]" />
+          </Field>
+          <Field label="Awards" hint="One award per line">
+            <Textarea value={data.awards ?? ''} onChange={(e) => set('awards', e.target.value || null)} placeholder={"Best Aesthetic Clinic 2024\nTop Rated on Treatwell"} className="min-h-[80px]" />
+          </Field>
+          <Field label="Affiliations" hint="One affiliation per line">
+            <Textarea value={data.affiliations ?? ''} onChange={(e) => set('affiliations', e.target.value || null)} placeholder={"British Association of Aesthetic Practitioners\nBritish College of Aesthetic Medicine"} className="min-h-[80px]" />
+          </Field>
+        </div>
+      </FormSection>
+
+      {/* Social Media */}
+      <FormSection title="Social Media" icon={IconShare3}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          {[
+            { key: 'facebook' as const, label: 'Facebook', placeholder: 'https://facebook.com/…' },
+            { key: 'instagram' as const, label: 'Instagram', placeholder: 'https://instagram.com/…' },
+            { key: 'twitter' as const, label: 'Twitter', placeholder: 'https://twitter.com/…' },
+            { key: 'xTwitter' as const, label: 'X (Twitter)', placeholder: 'https://x.com/…' },
+            { key: 'youtube' as const, label: 'YouTube', placeholder: 'https://youtube.com/…' },
+            { key: 'linkedin' as const, label: 'LinkedIn', placeholder: 'https://linkedin.com/…' },
+          ].map(({ key, label, placeholder }) => (
+            <Field key={key} label={label}>
+              <Input value={data[key] ?? ''} onChange={(e) => set(key, e.target.value || null)} placeholder={placeholder} />
+            </Field>
+          ))}
+        </div>
+      </FormSection>
+
+      {/* Regulatory — admin-managed only */}
+      {!isPortal && <FormSection title="Integration" icon={IconLink} description="Consentz Core CRM identifiers — set these to enable online booking and calendar sync">
+        <Field label="Core Clinic ID" hint="Consentz Core clinic ID (integer). Enables real-time availability and online booking.">
+          <Input
+            type="number"
+            value={data.coreClinicId ?? ''}
+            onChange={(e) => set('coreClinicId', e.target.value ? parseInt(e.target.value, 10) : null)}
+            placeholder="e.g. 42"
+            className="h-8 text-sm max-w-[180px]"
+          />
+        </Field>
+        <Field label="Consentz Username" hint="Consentz login that owns this clinic's portal. Requires Core Clinic ID to be set first. Required for SSO from Consentz to work — leave blank to skip username verification (any admin on this Consentz clinic will be able to sign in)." error={fieldErrors.consentzUsername}>
+          <Input
+            value={data.consentzUsername ?? ''}
+            onChange={(e) => set('consentzUsername', e.target.value || null)}
+            placeholder="e.g. jasmin.jasmin_5"
+            className={cn('h-8 text-sm max-w-[240px]', fieldErrors.consentzUsername && 'border-red-500 focus-visible:ring-red-500')}
+            aria-invalid={Boolean(fieldErrors.consentzUsername)}
+          />
+        </Field>
+      </FormSection>}
+
+      {!isPortal && <FormSection title="Regulatory Flags" icon={IconShieldCheck} description="Certifications and regulatory body memberships">
+        <div className="space-y-4">
+          <div className="flex items-center gap-8">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <Checkbox checked={data.isSaveFace} onCheckedChange={(v) => set('isSaveFace', !!v)} />
+              <span className="text-sm font-medium text-gray-700">Save Face</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <Checkbox checked={data.isDoctor} onCheckedChange={(v) => set('isDoctor', !!v)} />
+              <span className="text-sm font-medium text-gray-700">Doctor</span>
+            </label>
+          </div>
+          <div className="divide-y divide-gray-100 border border-gray-100 rounded-lg overflow-hidden">
+            {REG_FLAGS.map(({ key, urlKey, label }) => (
+              <div key={key} className="flex items-center gap-4 px-4 py-3 bg-gray-50/50 hover:bg-gray-50 transition-colors">
+                <label className="flex items-center gap-2 cursor-pointer w-24 shrink-0">
+                  <Checkbox checked={data[key] ?? false} onCheckedChange={(v) => set(key, v ? true : null)} />
+                  <span className="text-sm font-medium text-gray-700">{label}</span>
+                </label>
+                <Input
+                  value={data[urlKey] ?? ''}
+                  onChange={(e) => set(urlKey, e.target.value || null)}
+                  placeholder={`${label} profile URL`}
+                  className="h-8 text-sm flex-1"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      </FormSection>}
+
+      {/* Footer save */}
+      <div className="flex justify-end pt-2">
+        <Button size="lg" onClick={handleSave} disabled={saving || disabled}>
+          <IconDeviceFloppy stroke={1.5} className="h-3.5 w-3.5 mr-1.5" />
+          {saving ? 'Saving…' : 'Save Clinic'}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function LoadingSkeleton() {
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center gap-3">
+        <div className="w-8 h-8 bg-gray-100 rounded-lg animate-pulse" />
+        <div className="space-y-1">
+          <div className="h-3 w-12 bg-gray-100 rounded animate-pulse" />
+          <div className="h-4 w-32 bg-gray-100 rounded animate-pulse" />
+        </div>
+      </div>
+      {[1, 2, 3].map((i) => (
+        <div key={i} className="bg-white rounded-lg border border-gray-200 p-6 space-y-4">
+          <div className="h-4 w-24 bg-gray-100 rounded animate-pulse" />
+          <div className="grid grid-cols-2 gap-4">
+            {[1, 2, 3, 4].map((j) => (
+              <div key={j} className="h-9 bg-gray-100 rounded animate-pulse" />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}

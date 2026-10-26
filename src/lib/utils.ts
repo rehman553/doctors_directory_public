@@ -1,9 +1,23 @@
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
 import { Accreditation, Clinic, Practitioner, Product } from "./types"
-import { modalities, locations, accreditations } from "./data"
+import { modalities, locations, accreditations, cityMap } from "./data"
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
+}
+
+/**
+ * Booking slot times are always shown in the clinic's own timezone (never the
+ * visitor's browser timezone) — this renders the short abbreviation, e.g.
+ * "Europe/London" -> "GMT" or "BST" depending on the date shown.
+ */
+export function formatTimezoneAbbr(timezone: string, date: Date = new Date()): string {
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', { timeZone: timezone, timeZoneName: 'short' }).formatToParts(date)
+    return parts.find(p => p.type === 'timeZoneName')?.value ?? timezone
+  } catch {
+    return timezone
+  }
 }
 
 function credentialToSlug(name: string): string {
@@ -94,6 +108,16 @@ export function decodeUnicodeEscapes(str: string) {
   );
 }
 
+export function calculateAge(dateOfBirth: Date): number {
+  const today = new Date()
+  let age = today.getFullYear() - dateOfBirth.getFullYear()
+  const monthDiff = today.getMonth() - dateOfBirth.getMonth()
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dateOfBirth.getDate())) {
+    age--
+  }
+  return age
+}
+
 export function cleanRouteSlug(slug: string) {
   try {
   return slug.toLowerCase()
@@ -105,6 +129,27 @@ export function cleanRouteSlug(slug: string) {
 
     return slug
   }
+}
+
+export function toUrlSlug(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replaceAll(/&|\+/g, ' and ')
+    .replaceAll(/[\/\\]+/g, ' ')
+    .replaceAll(/[^a-z0-9\s-]/g, '')
+    .replaceAll(/\s+/g, '-')
+    .replaceAll(/-+/g, '-')
+    .replaceAll(/^-|-$/g, '')
+}
+
+export function capitalize(value: string): string {
+  return value
+    .trim()
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
 }
 
 export function parseLabels(label: string): [boolean, string] | null {
@@ -200,13 +245,63 @@ export const flattenObject = (obj: any, parentKey = "", result: any = {}) => {
 };
 
 export function fixMojibake(str: string) {
+  if (!str) return str
+  try {
+    const bytes = Uint8Array.from(str, (c) => c.charCodeAt(0) & 0xff)
+    const decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes)
+    if (decoded && !decoded.includes("\uFFFD")) {
+      return decoded
+    }
+  } catch {
+    /* fall through */
+  }
   try {
     return new TextDecoder("utf-8").decode(
-      Uint8Array.from(str, c => c.charCodeAt(0))
-    );
+      Uint8Array.from(str, (c) => c.charCodeAt(0))
+    )
   } catch {
-    return str;
+    return str
   }
+}
+
+const MOJIBAKE_REPLACEMENTS: ReadonlyArray<readonly [string, string]> = [
+  ["â€™", "'"],
+  ["â€˜", "'"],
+  ["â€œ", '"'],
+  ["â€\u009d", '"'],
+  ["Ã©", "é"],
+  ["Ã¨", "è"],
+  ["Ã¼", "ü"],
+  ["Ã¶", "ö"],
+  ["Ã¤", "ä"],
+  ["Ã±", "ñ"],
+  ["Â£", "£"],
+]
+
+export function sanitizeDisplayText(str: string): string {
+  if (!str || typeof str !== "string") return str
+  let out = str
+  for (let pass = 0; pass < 3; pass += 1) {
+    out = fixMojibake(out)
+    out = decodeUnicodeEscapes(out)
+    for (const [from, to] of MOJIBAKE_REPLACEMENTS) {
+      out = out.split(from).join(to)
+    }
+  }
+  out = out.replace(/\uFFFD/g, "'")
+  out = out.replace(/[\u2018\u2019\u201A\u2032]/g, "'")
+  out = out.replace(/[\u201C\u201D\u201E\u2033]/g, '"')
+  out = out.replace(/[\u00A0]/g, " ")
+  out = out.replace(/\byoull\b/gi, "you'll")
+  out = out.replace(/\bdoesnt\b/gi, "doesn't")
+  out = out.replace(/\bdont\b/gi, "don't")
+  out = out.replace(/\bisnt\b/gi, "isn't")
+  out = out.replace(/\barent\b/gi, "aren't")
+  out = out.replace(/\bwont\b/gi, "won't")
+  out = out.replace(/\bcant\b/gi, "can't")
+  out = out.replace(/\bIts\b/g, "It's")
+  out = out.replace(/\bits\b/g, "it's")
+  return out
 }
 
 export function isAward(obj: unknown): obj is {name:string; slug: string; image_url: string} {
@@ -215,7 +310,9 @@ export function isAward(obj: unknown): obj is {name:string; slug: string; image_
 }
 
 export function isCity(obj: unknown): obj is string {
-  return typeof obj === "string" && locations.includes(obj.split(" ").map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" "));
+  if (typeof obj !== "string") return false;
+  const normalized = obj.split(" ").map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
+  return locations.includes(normalized) || normalized in cityMap;
 }
 export function isTreatment(obj:unknown): obj is string{
     return typeof obj === "string" && modalities.includes(obj.split(" ").map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ").replace("Hifu", "HIFU").replace("Coolsculpting", "CoolSculpting"));

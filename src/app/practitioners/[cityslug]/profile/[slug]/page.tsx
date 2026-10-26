@@ -1,6 +1,5 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ProfileHeader } from "@/components/Practitioner/profile-header";
 import { GoogleMapsEmbed } from "@/components/gmaps-embed";
@@ -9,23 +8,29 @@ import { BoxPlotDatum, ItemMeta } from "@/lib/types";
 import { Stats } from "@/components/visx-donut";
 import ClinicDetailsMarkdown from "@/components/Practitioner/practitionerDetailsMD";
 import { Practitioner } from "@/lib/types";
-import fs from "fs";
-import path from "path";
 import PractitionerTabs from "@/components/Practitioner/PractitionerTabs";
-import { flattenObject } from "@/lib/utils";
+import { flattenObject, capitalize } from "@/lib/utils";
 import { Section } from "@/components/ui/section";
-import clinicsJson from "@/../public/clinics_processed_new_data.json";
-import { Clinic } from "@/lib/types";
 import ItemsGrid from "@/components/collectionGrid";
 import { MoreItems } from "@/components/MoreItems";
 import { locations } from "@/lib/data";
-import PractitionersJSON from "@/../public/derms_processed_new_5403.json";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb"
-const clinicsData = clinicsJson as unknown as Clinic[];
-const clinics = clinicsData
-  const clinicIndex = new Map(
-  clinics.filter(c=>c.slug !== undefined).map(c => [c.slug!, c])
-)
+import { ScoreInfoTooltip } from "@/components/score-info-tooltip";
+import { BestRankedBlock } from "@/components/best-ranked-block";
+import { buildPractitionerRankedEntries } from "@/lib/best-ranked";
+import { toDirectoryCanonical } from "@/lib/seo";
+import { getPractitionerBySlug, getPractitionersByCity } from "@/lib/data-access/practitioners";
+import { getAllTreatmentNames } from "@/lib/data-access/treatments";
+import { isRemovedPractitionerSlug } from "@/lib/directory-removals";
+import { DirectoryStarRating } from "@/components/directory-star-rating";
+import { PageViewTracker } from "@/components/tracking/page-view-tracker";
+import { EventBookingSection } from "@/components/Clinic/event-booking-section";
+import { getClaimState } from "@/lib/claim-utils";
+import { prisma } from "@/lib/db";
+import { getPortalUser } from "@/lib/portal";
+import { getPractitionerProfileRobots } from "@/lib/practitioner-profile-robots";
+import { getPractitionerDirectoryRobots } from "@/lib/practitioner-profile-robots";
+import { IconArrowNarrowLeft } from "@tabler/icons-react";
 
 function mergeBoxplotDataFromDict(
   base: BoxPlotDatum[],
@@ -40,30 +45,55 @@ function mergeBoxplotDataFromDict(
 
 interface ProfilePageProps {
   params: {
+    cityslug: string;
     slug: string;
   };
 }
 
-export default function ProfilePage({ params }: Readonly<ProfilePageProps>) {
-  const clinics = PractitionersJSON as unknown as Practitioner[];
+export default async function ProfilePage({ params }: Readonly<ProfilePageProps>) {
   const { slug } = params;
-  const clinic = clinics.find((p) => p.practitioner_name === slug);
-  const k = clinicIndex.get(JSON.parse(clinic!.Associated_Clinics!)[0])
-  const hoursObj = k?.hours as unknown as Record<string, any>;
-  const hours =
-    hoursObj["Typical_hours_listed_in_directories"] ?? k?.hours;
-  const flatHours = typeof hoursObj === 'object' ? flattenObject(hours) : hours
-  const practitioner = {...k,...clinic}
-  const cityClinics = Array.from(clinicIndex.values())
-  .filter(clinic => clinic.City === practitioner.City)
-  const uniqueTreatments = [
-  ...new Set(
-    cityClinics
-      .filter(c => Array.isArray(c.Treatments))
-      .flatMap(c => c.Treatments).filter((t): t is string => typeof t === "string")
+
+  if (isRemovedPractitionerSlug(slug)) {
+    notFound();
+  }
+
+  const [clinic, uniqueTreatments] = await Promise.all([
+    getPractitionerBySlug(slug),
+    getAllTreatmentNames(),
+  ])
+
+  if (!clinic) {
+    notFound();
+  }
+
+  const [claimState, portalUser] = await Promise.all([
+    getClaimState({ claimed: clinic.claimed ?? false, entityType: 'practitioner', slug: clinic.practitioner_name! }),
+    getPortalUser(),
+  ]);
+  const goToProfileHref = portalUser ? `/portal/${portalUser.entityType}` : '/portal/login';
+  const isOwner = portalUser?.entityType === 'practitioner' && portalUser.entitySlug === clinic.practitioner_name;
+  // Practitioners have no email column — once claimed, show the email they claimed with.
+  const approvedClaim = claimState === 'claimed'
+    ? await prisma.claimRequest.findFirst({
+        where: { entityType: 'practitioner', practitionerSlug: clinic.practitioner_name!, status: 'approved' },
+        orderBy: { approvedAt: 'desc' },
+        select: { claimerEmail: true },
+      })
+    : null;
+
+  const hoursObj = clinic.hours as unknown as Record<string, any>;
+  const hours = hoursObj?.["Typical_hours_listed_in_directories"] ?? clinic.hours;
+  const flatHours = typeof hours === 'object' ? flattenObject(hours) : hours
+
+  const practitioner = clinic
+  const currentCity = practitioner.City?.toLowerCase()
+
+  const cityPractitioners = currentCity ? await getPractitionersByCity(currentCity) : []
+
+  const rankedCityPractitioners = buildPractitionerRankedEntries(
+    cityPractitioners.filter((entry) => entry.practitioner_name !== clinic.practitioner_name),
+    5
   )
-];
-  
 
   const boxplotData = mergeBoxplotDataFromDict(
     boxplotDatas_clinic,
@@ -76,33 +106,33 @@ export default function ProfilePage({ params }: Readonly<ProfilePageProps>) {
   const rankingSubtitle =
     practitioner?.ranking?.subtitle_text ?? `${overallScore}/100 in ${practitioner?.City ?? "City"}`;
 
-  if (!clinic) {
-    notFound();
-  }
+  const associatedClinics: string[] = JSON.parse(clinic.Associated_Clinics ?? '[]')
 
   return (
+    <>
+    <PageViewTracker />
     <main className="min-h-screen bg-background">
       {/* Navigation */}
       <div className="sticky top-0 z-10">
-        <div className="container mx-auto max-w-6xl px-4 py-4">
-          <Link className="mb-2 inline-block" href="/" prefetch={false}>
+        <div className="container mx-auto max-w-7xl px-4 py-4">
+          <Link className="mb-3 inline-block" href="/" prefetch={false}>
             <Button variant="ghost" size="sm" className="gap-2 hover:cursor-pointer">
-              <ArrowLeft className="h-4 w-4" />
+              <IconArrowNarrowLeft stroke={1.5} className="h-4 w-4" />
               Back to Directory
             </Button>
           </Link>
           <Breadcrumb>
           <BreadcrumbList>
             <BreadcrumbItem>
-              <BreadcrumbLink href="/directory">Home</BreadcrumbLink>
+              <BreadcrumbLink href="/">Home</BreadcrumbLink>
             </BreadcrumbItem>
             <BreadcrumbSeparator />
             <BreadcrumbItem>
-              <BreadcrumbLink href="/directory/practitioners">Practitioners</BreadcrumbLink>
+              <BreadcrumbLink href="/practitioners">Practitioners</BreadcrumbLink>
             </BreadcrumbItem>
             <BreadcrumbSeparator />
             <BreadcrumbItem>
-              <BreadcrumbLink href={`/directory/practitioners/${practitioner.City}`}>{`${practitioner.City}`}</BreadcrumbLink>
+              <BreadcrumbLink href={`/practitioners/${practitioner.City}`}>{`${practitioner.City}`}</BreadcrumbLink>
             </BreadcrumbItem>
             <BreadcrumbSeparator />
             <BreadcrumbItem>
@@ -113,44 +143,46 @@ export default function ProfilePage({ params }: Readonly<ProfilePageProps>) {
         </div>
        </div>
 
-       <div className="container mx-auto max-w-6xl pt-0 md:px-4 py-20 space-y-8">
+       <div className="container mx-auto max-w-7xl pt-0 md:px-4 py-20 space-y-8">
                {/* Profile Header */}
-               <ProfileHeader clinic={clinic} k_value={k} clinic_list ={JSON.parse(clinic!.Associated_Clinics!)} />
-       
+               <ProfileHeader
+                 clinic={clinic}
+                 k_value={{ ...practitioner, email: approvedClaim?.claimerEmail ?? '' } as any}
+                 clinic_list={associatedClinics}
+                 claimState={claimState}
+                 goToProfileHref={goToProfileHref}
+                 isOwner={isOwner}
+               />
+
                <div className="px-4 md:px-0">
                  <PractitionerTabs />
-       
+
                  <div className="grid grid-cols-1 gap-8 lg:grid-cols-10 mb-4">
                    <div className="order-2 lg:order-1 col-span-1 lg:col-span-6">
                      <ClinicDetailsMarkdown clinic={practitioner} />
                    </div>
                    <div className="order-1 lg:order-2 col-span-1 lg:col-span-4">
-                     <div className="border border-gray-300 rounded-xl p-6">
-                       <div className="flex flex-row gap-2 pt-2 mb-4 items-center justify-center text-sm">
-                         <div className="inline-flex items-center gap-1">
-                           <div className="flex items-center">
-                             {Array.from({ length: 5 }, (_, i) => (
-                               <Star
-                                 key={i}
-                                 className={`h-4 w-4 ${
-                                   i < k!.rating
-                                     ? "fill-black text-black"
-                                     : "/30"
-                                 }`}
-                               />
-                             ))}
-                           </div>
-                         </div>
-                         <span
-                           className="border-l border-black pl-2 underline"
-                           aria-label={`${practitioner.reviewCount} reviews`}
-                         >
-                           {practitioner.reviewCount ? practitioner.reviewCount+"+ Reviews Analysed" : "0"}
-                         </span>
+                     <div className="border border-gray-300 rounded-lg p-6">
+                       <DirectoryStarRating
+                         reviewCount={practitioner.reviewCount ?? 0}
+                         reviewsLabel={
+                           practitioner.reviewCount
+                             ? `${practitioner.reviewCount}+ Reviews Analysed`
+                             : "0"
+                         }
+                         className="justify-center pt-2 mb-4"
+                       />
+                       <div className="border-t border-gray-300 my-4"></div>
+                       <div className="mb-4 flex items-center justify-center gap-2">
+                         <h3 className="text-center text-lg font-semibold text-foreground">
+                           Consentz® Practitioner Score
+                         </h3>
+                         <ScoreInfoTooltip entityLabel="practitioner" />
                        </div>
-                       <div className="border-t border-gray-300 my-6"></div>
                        <Stats data={boxplotData} />
-                       <p className="mt-3 text-xs text-gray-600">{rankingSubtitle}</p>
+                       <p className="mt-3 text-xs font-medium text-black">
+                         {rankingSubtitle}
+                       </p>
                      </div>
                      {/* HOURS */}
               {flatHours && (
@@ -174,19 +206,19 @@ export default function ProfilePage({ params }: Readonly<ProfilePageProps>) {
                 </Section>
               )}
               {/* PAYMENTS */}
-              {k?.Payments && (
+              {practitioner.Payments && (
               <Section title="Payment Options" id="payments">
-                {Array.isArray(k?.Payments) ? (
+                {Array.isArray(practitioner.Payments) ? (
                   <ul className="list-disc ml-6 space-y-1" data-testid="payments">
-                    {k?.Payments.map((p: any, idx: number) => (
+                    {(practitioner.Payments as any[]).map((p: any, idx: number) => (
                       <li key={idx}>{p}</li>
                     ))}
                   </ul>
-                ) : k?.Payments && typeof k?.Payments === "object" ? (
+                ) : practitioner.Payments && typeof practitioner.Payments === "object" ? (
                   <div className="overflow-x-auto shadow-none">
                     <table className="w-full text-sm bg-white">
                       <tbody>
-                        {Object.entries(k?.Payments).map(
+                        {Object.entries(practitioner.Payments as any).map(
                           ([k, v]) =>
                             k !== "Source" && (
                               <tr key={k}>
@@ -194,7 +226,7 @@ export default function ProfilePage({ params }: Readonly<ProfilePageProps>) {
                                   {k?.toString()}
                                 </td>
                                 <td className="border-0 px-4 py-2">
-                                  {v?.toString()}
+                                  {(v as any)?.toString()}
                                 </td>
                               </tr>
                             )
@@ -203,24 +235,26 @@ export default function ProfilePage({ params }: Readonly<ProfilePageProps>) {
                     </table>
                   </div>
                 ) : (
-                  k?.Payments || "Not listed"
+                  String(practitioner.Payments) || "Not listed"
                 )}
               </Section>)}
+              <EventBookingSection practitionerSlug={slug} entityName={clinic.practitioner_name ?? undefined} />
+
               <div className='flex flex-col sm:flex-row gap-2'>
-                   
-                
+
+
                      <GoogleMapsEmbed
                  url={practitioner.url}
-                 
+
                  className="w-full h-auto md:h-80"
-               />  
-               
+               />
+
              </div>
-                   
+
                    </div>
                  </div>
-                 
-       
+
+
 
                 </div>
                  <div className="px-4 md:px-0 space-y-6">
@@ -228,40 +262,62 @@ export default function ProfilePage({ params }: Readonly<ProfilePageProps>) {
                    <MoreItems items={uniqueTreatments} />
                    <h3 className="text-lg font-semibold text-foreground mb-2">{`Top Cities in the UK`}</h3>
                    <MoreItems items={locations} />
-
+                 </div>
+                 <div className="px-4 md:px-0 space-y-4">
+                   <BestRankedBlock
+                     title={`Best Practitioners in ${practitioner.City}`}
+                     entries={rankedCityPractitioners}
+                   />
                  </div>
               </div>
 
     </main>
+    </>
   );
 }
 
-// export async function generateStaticParams() {
-
-//   const filePath = path.join(process.cwd(), 'public', 'derms_processed.json');
-//   const fileContents = fs.readFileSync(filePath, 'utf-8');
-//   const clinics: Practitioner[] = JSON.parse(fileContents);
-//   return clinics.map((clinic) => ({
-//     slug: clinic.practitioner_name,
-//   }));
-// }
-
 export async function generateMetadata({ params }: ProfilePageProps) {
-  const filePath = path.join(process.cwd(), "public", "derms_processed_new_5403.json");
-  const fileContents = fs.readFileSync(filePath, "utf-8");
-  const clinics: Practitioner[] = JSON.parse(fileContents);
-  const clinic = clinics.find((p) => p.practitioner_name === params.slug);
+  if (isRemovedPractitionerSlug(params.slug)) {
+    notFound();
+  }
+
+  const clinic = await getPractitionerBySlug(params.slug)
+  const citySlug = decodeURIComponent(params.cityslug).toLowerCase();
+  const canonicalSlug = decodeURIComponent(params.slug).toLowerCase();
+  const canonicalUrl = toDirectoryCanonical(
+    `/practitioners/${citySlug}/profile/${canonicalSlug}`
+  );
+
+  const robots = getPractitionerDirectoryRobots()
 
   if (!clinic) {
     return {
       title: "Practitioner Not Found",
+      alternates: { canonical: canonicalUrl },
+      ...(robots ? { robots } : {}),
     };
   }
 
-  const clinicName = clinic.practitioner_name;
+  const practitionerDisplayName = capitalize(clinic.practitioner_name!);
+  const city = capitalize(citySlug);
+
+  let topTreatments: string[] = [];
+  if (Array.isArray(clinic.Treatments) && clinic.Treatments.length > 0) {
+    topTreatments = clinic.Treatments.slice(0, 2).map(t => capitalize(t));
+  }
+
+  const treatments = topTreatments.length >= 2
+    ? `${topTreatments[0]}, ${topTreatments[1]} & Reviews`
+    : topTreatments.length === 1
+    ? `${topTreatments[0]} & Reviews`
+    : "Aesthetic Treatments & Reviews";
+  const title = `${practitionerDisplayName} ${city} | ${treatments}`;
+  const description = `Compare ${practitionerDisplayName} in ${city}. See prices, reviews, treatments, and book consultations instantly.`;
 
   return {
-    title: `${clinicName} - Healthcare Directory`,
-    description: `View the profile of ${clinicName}, a qualified ${clinic.practitioner_title} offering professional healthcare services. Read reviews and book appointments.`,
+    title,
+    description,
+    alternates: { canonical: canonicalUrl },
+    ...(robots ? { robots } : {}),
   };
 }

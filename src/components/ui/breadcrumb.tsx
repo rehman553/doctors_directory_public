@@ -1,6 +1,7 @@
 import * as React from "react"
+import Link from "next/link"
 import { Slot } from "@radix-ui/react-slot"
-import { ChevronRight, MoreHorizontal } from "lucide-react"
+import { IconChevronRight, IconDots } from "@tabler/icons-react"
 
 import { cn } from "@/lib/utils"
 
@@ -34,16 +35,39 @@ function BreadcrumbItem({ className, ...props }: React.ComponentProps<"li">) {
 function BreadcrumbLink({
   asChild,
   className,
+  href,
   ...props
 }: React.ComponentProps<"a"> & {
   asChild?: boolean
 }) {
-  const Comp = asChild ? Slot : "a"
+  const classNames = cn(
+    "text-black hover:text-foreground hover:underline transition-colors",
+    className
+  )
+
+  if (asChild) {
+    return (
+      <Slot data-slot="breadcrumb-link" className={classNames} {...props} />
+    )
+  }
+
+  const hrefStr = typeof href === "string" ? href : undefined
+  if (hrefStr && hrefStr.startsWith("/") && !hrefStr.startsWith("//")) {
+    return (
+      <Link
+        data-slot="breadcrumb-link"
+        className={classNames}
+        href={hrefStr}
+        {...props}
+      />
+    )
+  }
 
   return (
-    <Comp
+    <a
       data-slot="breadcrumb-link"
-      className={cn("text-black hover:text-foreground hover:underline transition-colors", className)}
+      className={classNames}
+      href={href}
       {...props}
     />
   )
@@ -75,7 +99,7 @@ function BreadcrumbSeparator({
       className={cn("[&>svg]:size-3.5", className)}
       {...props}
     >
-      {children ?? <ChevronRight />}
+      {children ?? <IconChevronRight stroke={1.5} />}
     </li>
   )
 }
@@ -92,7 +116,7 @@ function BreadcrumbEllipsis({
       className={cn("flex size-9 items-center justify-center", className)}
       {...props}
     >
-      <MoreHorizontal className="size-4" />
+      <IconDots stroke={1.5} className="size-4" />
       <span className="sr-only">More</span>
     </span>
   )

@@ -1,12 +1,10 @@
-import { notFound } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { decodeUnicodeEscapes } from "@/lib/utils";
+import { FallbackImage, DEFAULT_PRODUCT } from "@/components/ui/fallback-image";
 import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import { Product } from "@/lib/types";
-import fs from "fs";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -15,8 +13,13 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
-import path from "path";
-import productsJSON from "@/../public/products_processed_new.json";
+import { getProductsByBrand, getAllBrands } from "@/lib/data-access/products";
+import { isRemovedBrandHub } from "@/lib/product-removals";
+import { resolveDirectoryPageMeta } from "@/lib/directory-page-meta";
+import { toDirectoryCanonical } from "@/lib/seo";
+import { toUrlSlug } from "@/lib/utils";
+import { notFound } from "next/navigation";
+import { IconArrowNarrowLeft } from "@tabler/icons-react";
 
 interface ProfilePageProps {
   params: {
@@ -24,56 +27,129 @@ interface ProfilePageProps {
   };
 }
 
-export default async function ProfilePage({ params }: Readonly<ProfilePageProps>) {
-  const clinics = productsJSON as unknown as Product[];
-  let { brand } = params;
-  brand = decodeURIComponent(brand).replaceAll('%20', " ");
-  const similarProducts = clinics.filter((p) => p.brand === brand );
+export async function generateMetadata({ params }: Readonly<ProfilePageProps>) {
+  const brandSlug = decodeURIComponent(params.brand).toLowerCase();
+  const brandName = decodeURIComponent(params.brand).replaceAll("-", " ");
 
-  if (!similarProducts) {
+  if (isRemovedBrandHub(brandSlug)) {
+    return {
+      title: "Brand Not Found",
+      alternates: {
+        canonical: toDirectoryCanonical(`/products/brands/${brandSlug}`),
+      },
+    };
+  }
+
+  const meta = resolveDirectoryPageMeta(`/products/brands/${toUrlSlug(brandSlug)}/`, {
+    title: `Top ${brandName} Aesthetic Products - Compare Prices & Reviews`,
+    description: `Browse verified ${brandName} aesthetic products. Compare formulations, pricing and distributor information from a trusted UK directory.`,
+  });
+
+  return {
+    title: meta.title,
+    description: meta.description,
+    keywords: meta.keywords,
+    alternates: {
+      canonical: toDirectoryCanonical(`/products/brands/${brandSlug}`),
+    },
+  };
+}
+
+export default async function ProfilePage({ params }: Readonly<ProfilePageProps>) {
+  const rawBrand = decodeURIComponent(params.brand).replaceAll('%20', " ");
+
+  if (isRemovedBrandHub(rawBrand)) {
     notFound();
   }
 
+  // Resolve to the canonical brand name stored in the DB (handles slug-casing differences
+  // e.g. URL "allergan" → DB "Allergan", URL "abbvie" → DB "AbbVie")
+  const allBrands = await getAllBrands();
+  const resolvedBrand =
+    allBrands.find((b) => toUrlSlug(b) === toUrlSlug(rawBrand)) ?? rawBrand;
+
+  const similarProducts = await getProductsByBrand(resolvedBrand);
+  // Use the canonical brand name for all display purposes
+  const brand = resolvedBrand;
+
+  if (similarProducts.length === 0) {
+    return (
+      <main className="min-h-screen bg-[#fbfbfb]">
+        <div className="sticky top-0 z-10">
+          <div className="container mx-auto max-w-7xl px-4 py-4">
+            <Link href="/products/brands" prefetch={false}>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-2 hover:cursor-pointer hover:bg-white hover:text-black"
+              >
+                <IconArrowNarrowLeft stroke={1.5} className="h-4 w-4" />
+                Back to Brands
+              </Button>
+            </Link>
+          </div>
+        </div>
+        <div className="container mx-auto max-w-7xl px-4 py-16 space-y-8">
+          <div className="text-center space-y-3">
+            <h1 className="text-2xl font-medium text-foreground">Brand not found</h1>
+            <p className="text-gray-600 text-sm">
+              We couldn&apos;t find any products for &ldquo;{brand}&rdquo;. Browse our top product brands below.
+            </p>
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-foreground mb-4">Top Product Brands</h2>
+            <ul className="flex flex-wrap gap-2">
+              {allBrands.map((b) => (
+                <li key={b}>
+                  <Link
+                    href={`/products/brands/${toUrlSlug(b)}`}
+                    className="inline-block px-3 py-1.5 rounded-full border border-[#e0e0e0]  bg-white text-sm text-gray-700 hover:bg-black hover:text-white hover:border-black transition-colors"
+                  >
+                    {b}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
   return (
-    <main className="min-h-screen bg-(--primary-bg-color)">
+    <main className="min-h-screen bg-[#fbfbfb]">
       {/* Navigation */}
       <div className="sticky top-0 z-10">
-        <div className="container mx-auto max-w-6xl px-4 py-4">
-          <Link href="/" prefetch={false}>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="gap-2 hover:cursor-pointer hover:bg-white hover:text-black"
-            >
-              <ArrowLeft className="h-4 w-4" />
+        <div className="container mx-auto max-w-7xl px-4 py-4">
+          <Link href="/" prefetch={false} className="mb-4 inline-flex items-center gap-3 text-sm hover:underline">
+              <IconArrowNarrowLeft stroke={1.5} className="h-4 w-4" />
               Back to Directory
-            </Button>
           </Link>
         </div>
-        <div className="container mx-auto max-w-6xl px-4 py-2">
+        <div className="container mx-auto max-w-7xl px-4 py-2">
           <Breadcrumb>
             <BreadcrumbList>
               <BreadcrumbItem>
-                <BreadcrumbLink href="/directory">Home</BreadcrumbLink>
+                <BreadcrumbLink href="/">Home</BreadcrumbLink>
               </BreadcrumbItem>
               <BreadcrumbSeparator />
               <BreadcrumbItem>
-                <BreadcrumbLink href="/directory/products">
+                <BreadcrumbLink href="/products">
                   Products
                 </BreadcrumbLink>
               </BreadcrumbItem>
               <BreadcrumbSeparator />
               <BreadcrumbItem>
                 <BreadcrumbLink
-                  href={`/directory/products/brand/${brand}`}
-                >{`${brand}`}</BreadcrumbLink>
+                  href={`/products/brands/${toUrlSlug(brand)}`}
+                >{brand}</BreadcrumbLink>
               </BreadcrumbItem>
             </BreadcrumbList>
           </Breadcrumb>
         </div>
       </div>
 
-      <div className="container mx-auto max-w-6xl pt-0 md:px-4 py-20 space-y-8">
+      <div className="container mx-auto max-w-7xl pt-0 md:px-4 py-20 space-y-8">
         {/* Profile Header */}
 
         <h3 className="text-lg font-semibold text-foreground mb-2">{`${brand}`}</h3>
@@ -85,10 +161,10 @@ export default async function ProfilePage({ params }: Readonly<ProfilePageProps>
             >
               <Link
                 prefetch={false}
-                href={`/products/brands/${brand}/${practitioner.slug}`}
+                href={`/products/brands/${toUrlSlug(brand)}/${practitioner.slug}`}
                 className="block"
               >
-                <Card className="group bg-white hover:shadow-lg transition-all duration-300 cursor-pointer border border-[#BDBDBD] md:border-0 rounded-lg sm:bg-transparent sm:border-0 sm:hover:border-accent/50 sm:flex sm:flex-col sm:gap-5">
+                <Card className="group bg-white transition-all duration-300 cursor-pointer border border-[#BDBDBD] md:border-0 rounded-lg sm:bg-transparent sm:border-0 sm:hover:border-accent/50 sm:flex sm:flex-col sm:gap-5">
                   <CardHeader className="pb-2 px-2">
                     <h2
                       id={`product-name-${practitioner.slug}`}
@@ -100,13 +176,11 @@ export default async function ProfilePage({ params }: Readonly<ProfilePageProps>
                       <div className="text-center flex-1 min-w-0 items-center flex flex-col">
                         <div className="flex w-full flex-row items-start border-b border-[#C4C4C4] md:border-0 md:flex-col md:items-center">
                           <div className="w-[80px] h-[80px] md:w-[150px] md:h-[150px] flex items-center justify-center overflow-hidden md:mb-4 mr-0">
-                            <img
-                              src={
-                                practitioner.image_url?.replaceAll('"', "") ||
-                                "/placeholder.svg"
-                              }
-                              alt="Product"
+                            <FallbackImage
+                              src={practitioner.image_url?.replaceAll('"', "")}
+                              alt={practitioner.product_name ?? "Product"}
                               className="object-cover rounded-full min-w-full min-h-full"
+                              fallback={DEFAULT_PRODUCT}
                             />
                           </div>
 
@@ -139,27 +213,26 @@ export default async function ProfilePage({ params }: Readonly<ProfilePageProps>
                         className="flex flex-wrap md:items-center md:justify-center gap-1 text-center"
                         aria-label="Product prices"
                       >
-                        {practitioner &&
-                          practitioner?.all_prices
-                            ?.slice(0, 3)
-                            .map((value: any, index: number) => (
-                              <li key={index}>
-                                <Badge
-                                  variant="outline"
-                                  className="text-[11px] font-normal text-gray-500"
-                                >
-                                  {value.price}
-                                </Badge>
-                              </li>
-                            ))}
+                        {practitioner?.all_prices
+                          ?.slice(0, 3)
+                          .map((value: any, i: number) => (
+                            <li key={i}>
+                              <Badge
+                                variant="outline"
+                                className="text-[11px] font-normal text-gray-600"
+                              >
+                                {value.price}
+                              </Badge>
+                            </li>
+                          ))}
 
-                        {practitioner && (
-                          <li key={index}>
+                        {(practitioner?.all_prices?.length ?? 0) > 3 && (
+                          <li>
                             <Badge
                               variant="outline"
-                              className="text-[11px] font-normal text-gray-500"
+                              className="text-[11px] font-normal text-gray-600"
                             >
-                              + {practitioner?.all_prices?.length - 3} more
+                              + {practitioner.all_prices.length - 3} more
                             </Badge>
                           </li>
                         )}

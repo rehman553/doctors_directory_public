@@ -2,15 +2,14 @@ import type React from "react";
 import type { Metadata } from "next";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
-import { Analytics } from "@vercel/analytics/next";
-import { Suspense } from "react";
-import Header from "@/components/header";
-import { Footer } from "@/components/footer";
-import { ScrollToTop } from "@/components/scroll-to-top";
+import { AdminRootShell } from "@/components/admin/admin-root-shell";
+import { GaPageView } from "@/components/analytics/ga-page-view";
+import { AttributionTracker } from "@/components/tracking/attribution-tracker";
+import { ConsentScripts } from "@/components/cookie-consent/consent-scripts";
+import { SearchAtlasScript } from "@/components/search-atlas-script";
+import { readCookieConsentFromRequest } from "@/lib/cookie-consent-server";
 
 import "./globals.css";
-
-const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://staging.consentz.com'
 
 export const metadata: Metadata = {
   title: "Aesthetic Directory - List Your Clinic & Grow Your Practice",
@@ -26,28 +25,29 @@ export const metadata: Metadata = {
     "max-image-preview": "large",
   },
 
-  alternates: {
-    canonical: `${baseUrl}/directory`,
-  },
 };
 export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const initialConsent = await readCookieConsentFromRequest();
+
   return (
     <html lang="en" className="root">
+      <head>
+        <ConsentScripts initialConsent={initialConsent} />
+        <SearchAtlasScript />
+      </head>
       <body
         className={`${GeistSans.variable} ${GeistMono.variable} font-base`}
         
       >
-        <div className="overflow-hidden">
-          <Header />
-          <Suspense fallback={null}>{children}</Suspense>
-          <Footer />
-          <ScrollToTop />
-          <Analytics />
-        </div>
+        <AttributionTracker />
+        <GaPageView />
+        <AdminRootShell>
+          {children}
+        </AdminRootShell>
       </body>
     </html>
   );

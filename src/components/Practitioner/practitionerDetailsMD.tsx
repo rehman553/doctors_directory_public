@@ -33,28 +33,32 @@ export default function PractitionerDetailsSections({
           "Not publicly listed"
         )}
       </Section>
-      <div className="border-t border-gray-300 my-6"></div>
-      {/* Treatments */}
-      <Section title="Treatments" id="treatmetnts">
-        <div className="flex flex-wrap gap-1">
-          {clinic.Treatments &&
-            clinic.Treatments?.map(
-              (modality, index) => 
-                { 
-                  const treatments = modality.split(" ").map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
-                  
-                  return (
-                  
-                <Link key={modality} href={`/treatments/${treatments}`}>
-                  <Badge variant="outline" className="text-md bg-gray-100 border-0">
-                    {treatments}
-                  </Badge>
-                </Link> )}
-              
-            )}
-        </div>
-      </Section>
-      <div className="border-t border-gray-300 my-6"></div>
+      {/* Treatments — hidden for unclaimed practitioners; unverified treatment lists can be inaccurate */}
+      {clinic.claimed && (
+        <>
+          <div className="border-t border-[#e0e0e0]  my-6"></div>
+          <Section title="Treatments" id="treatmetnts">
+            <div className="flex flex-wrap gap-1">
+              {clinic.Treatments &&
+                clinic.Treatments?.map(
+                  (modality, index) =>
+                    {
+                      const treatments = modality.split(" ").map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
+
+                      return (
+
+                    <Link key={modality} href={`/treatments/${treatments}`}>
+                      <Badge variant="outline" className="text-md bg-gray-100 border-0">
+                        {treatments}
+                      </Badge>
+                    </Link> )}
+
+                )}
+            </div>
+          </Section>
+        </>
+      )}
+      <div className="border-t border-[#e0e0e0]  my-6"></div>
       {/* Qualifications */}
       <Section title="Qualifications" id="qualifications" data-testid='qualifications'>
         {parseList(fixPythonArrayString(clinic.practitioner_qualifications))
@@ -70,7 +74,7 @@ export default function PractitionerDetailsSections({
           "Not publicly listed"
         )}
       </Section>
-      <div className="border-t border-gray-300 my-6"></div>
+      <div className="border-t border-[#e0e0e0]  my-6"></div>
       {/* Experience */}
       <Section title="Experience" id="experience" data-testid='experience'>
         {parseList(fixPythonArrayString(clinic.practitioner_experience))
@@ -86,7 +90,7 @@ export default function PractitionerDetailsSections({
           "Not publicly listed"
         )}
       </Section>
-      <div className="border-t border-gray-300 my-6"></div>
+      <div className="border-t border-[#e0e0e0]  my-6"></div>
       {/* News */}
       <Section title="News" id="news">
         {parseList(fixPythonArrayString(clinic.practitioner_media)).length ? (
@@ -101,7 +105,7 @@ export default function PractitionerDetailsSections({
           "Not publicly listed"
         )}
       </Section>
-      <div className="border-t border-gray-300 my-6"></div>
+      <div className="border-t border-[#e0e0e0]  my-6"></div>
       {/* AWARDS */}
       <Section title="Awards" id="awards">
         {parseList(fixPythonArrayString(clinic.practitioner_awards)).length ? (
@@ -116,7 +120,7 @@ export default function PractitionerDetailsSections({
           "Not publicly listed"
         )}
       </Section>
-      <div className="border-t border-gray-300 my-6"></div>
+      <div className="border-t border-[#e0e0e0]  my-6"></div>
       {/* HOURS */}
       {/* {clinic.hours && typeof clinic.hours === "object" && (
         <Section title="Hours" id='hours'>
@@ -165,7 +169,7 @@ export default function PractitionerDetailsSections({
         ) : (
           clinic.Insurace || "Not listed"
         )}
-        <div className="border-t border-gray-300 my-6"></div>
+        <div className="border-t border-[#e0e0e0]  my-6"></div>
       </Section>
       
       )
@@ -173,33 +177,8 @@ export default function PractitionerDetailsSections({
 
       
 
-      {/* FEES */}
-      {clinic.Fees && (
-      <Section title={`Estimated Fees in ${clinic.City}`} id="fees">
-        {clinic.Fees && typeof clinic.Fees === "object" ? (
-          <div className="overflow-x-auto shadow-none">
-            <table className="w-full text-sm bg-white" data-testid='fees'>
-              <tbody>
-                {Object.entries(clinic.Fees).map(
-                  ([k, v]) =>
-                    
-                  
-                      <tr key={k}>
-                        <td className="align-top border-0 px-1 py-1 font-medium">{(v as any)?.['treatment']}</td>
-                        <td className="align-top border-0 px-1 py-1">
-                          {(v as any)?.['price'].split("(")[0]}</td>
-                      </tr>
-                    )
-                }
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          clinic.Fees || "Not listed"
-        )}
-      </Section>
-      )
-    }
+      {/* FEES — price list is temporarily disabled site-wide, section stays but blank */}
+      <Section title={`Estimated Fees in ${clinic.City}`} id="fees" />
     </div>
   );
 }

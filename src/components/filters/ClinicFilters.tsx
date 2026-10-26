@@ -1,5 +1,4 @@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Button } from "@/components/ui/button";
 import { modalities, locations } from "@/lib/data";
 interface ClinicFilters {
   servicesOffered: string;
@@ -33,7 +32,8 @@ export function ClinicFilters({ filters, onChange, onClear, setIsFilterActive }:
           value={filters.query || ""}
           onChange={(e) => onChange("query", e.target.value)}
           placeholder="Search clinics..."
-          className="w-full px-3 py-2 text-base border rounded-md bg-white"
+          maxLength={255}
+          className="w-full px-3 py-2 text-base border rounded-lg bg-white"
         />
       </div>
 
@@ -51,7 +51,7 @@ export function ClinicFilters({ filters, onChange, onClear, setIsFilterActive }:
             if (open) setIsFilterActive(true);
           }}
         >
-          <SelectTrigger className="w-full h-12 px-4 py-3 bg-white border border-gray-300 rounded-md">
+          <SelectTrigger className="w-full h-12 px-4 py-3 bg-white border border-[#e0e0e0]  rounded-lg">
             <SelectValue placeholder="All" />
           </SelectTrigger>
 
@@ -71,7 +71,7 @@ export function ClinicFilters({ filters, onChange, onClear, setIsFilterActive }:
           htmlFor="clinics-distance"
           className="block text-base font-medium text-black mb-2"
         >
-          Location
+          City
         </label>
         <Select
           value={filters.location}
@@ -80,7 +80,7 @@ export function ClinicFilters({ filters, onChange, onClear, setIsFilterActive }:
             if (open) setIsFilterActive(true);
           }}
         >
-          <SelectTrigger className="w-full h-12 px-4 py-3 bg-white border border-gray-300 rounded-md">
+          <SelectTrigger className="w-full h-12 px-4 py-3 bg-white border border-[#e0e0e0]  rounded-lg">
             <SelectValue placeholder="All" />
           </SelectTrigger>
           <SelectContent>
@@ -108,7 +108,7 @@ export function ClinicFilters({ filters, onChange, onClear, setIsFilterActive }:
             if (open) setIsFilterActive(true);
           }}
         >
-          <SelectTrigger className="w-full h-12 px-4 py-3 bg-white border border-gray-300 rounded-md">
+          <SelectTrigger className="w-full h-12 px-4 py-3 bg-white border border-[#e0e0e0]  rounded-lg">
             <SelectValue placeholder="All" />
           </SelectTrigger>
           <SelectContent>
@@ -128,12 +128,6 @@ export function ClinicFilters({ filters, onChange, onClear, setIsFilterActive }:
         </Select>
       </div>
 
-      <Button
-        onClick={onClear}
-        className="w-full border border-black bg-transparent text-black hover:bg-white hover:text-black cursor-pointer"
-      >
-        Clear All
-      </Button>
     </>
   );
 }

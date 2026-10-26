@@ -1,0 +1,157 @@
+name: Build And Deploy (Staging)
+
+on:
+  push:
+    branches:
+      - staging
+  workflow_dispatch:
+
+env:
+  CONTAINER_NAME: doctors-directory-staging
+  APP_PORT: "3000"
+  DEPLOY_DIR: /opt/doctors-directory-staging
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set image name
+        shell: bash
+        run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          cache-from: type=gha,scope=staging
+          cache-to: type=gha,mode=min,scope=staging
+          build-args: |
+            NEXT_PUBLIC_DIRECTORY_BASE_URL=${{ vars.STAGING_NEXT_PUBLIC_DIRECTORY_BASE_URL }}
+            NEXT_PUBLIC_BASE_URL=${{ vars.STAGING_NEXT_PUBLIC_BASE_URL }}
+            NEXT_PUBLIC_MARKETING_BASE_URL=${{ vars.STAGING_NEXT_PUBLIC_MARKETING_BASE_URL }}
+            NEXT_PUBLIC_GA_MEASUREMENT_ID=${{ vars.STAGING_NEXT_PUBLIC_GA_MEASUREMENT_ID }}
+          tags: |
+            ${{ env.IMAGE_NAME }}:staging
+            ${{ env.IMAGE_NAME }}:staging-${{ github.sha }}
+
+  deploy-and-cleanup:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set image name
+        shell: bash
+        run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: Copy compose file to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.STAGING_SSH_HOST }}
+          username: ${{ secrets.STAGING_SSH_USER }}
+          key: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          port: ${{ secrets.STAGING_SSH_PORT || '22' }}
+          source: docker-compose.yml
+          target: ${{ env.DEPLOY_DIR }}
+
+      - name: Deploy and cleanup on server
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}:staging
+          DEPLOY_DIR: ${{ env.DEPLOY_DIR }}
+          COMPOSE_PROJECT_NAME: ${{ env.CONTAINER_NAME }}
+          APP_PORT: ${{ vars.STAGING_APP_PORT || env.APP_PORT }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          DB_ROOT_PASSWORD: ${{ secrets.STAGING_DB_ROOT_PASSWORD }}
+          NEXT_PUBLIC_DIRECTORY_BASE_URL: ${{ vars.STAGING_NEXT_PUBLIC_DIRECTORY_BASE_URL }}
+          NEXT_PUBLIC_BASE_URL: ${{ vars.STAGING_NEXT_PUBLIC_BASE_URL }}
+          NEXT_PUBLIC_MARKETING_BASE_URL: ${{ vars.STAGING_NEXT_PUBLIC_MARKETING_BASE_URL }}
+          NEXT_PUBLIC_GA_MEASUREMENT_ID: ${{ vars.STAGING_NEXT_PUBLIC_GA_MEASUREMENT_ID }}
+          CONSENTZ_AUTH_API_URL: ${{ secrets.STAGING_CONSENTZ_AUTH_API_URL }}
+          CONSENTZ_APPLICATION_ID: ${{ vars.STAGING_CONSENTZ_APPLICATION_ID }}
+          STRIPE_SECRET_KEY: ${{ secrets.STAGING_STRIPE_SECRET_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STAGING_STRIPE_WEBHOOK_SECRET }}
+          SMTP_HOST: ${{ secrets.STAGING_SMTP_HOST }}
+          SMTP_PORT: ${{ vars.STAGING_SMTP_PORT }}
+          SMTP_USER: ${{ secrets.STAGING_SMTP_USER }}
+          SMTP_PASS: ${{ secrets.STAGING_SMTP_PASS }}
+          EMAIL_FROM: ${{ vars.STAGING_EMAIL_FROM }}
+          ADMIN_EMAIL: ${{ vars.STAGING_ADMIN_EMAIL }}
+          SMS_PROVIDER: ${{ vars.STAGING_SMS_PROVIDER }}
+          PLIVO_AUTH_ID: ${{ secrets.STAGING_PLIVO_AUTH_ID }}
+          PLIVO_AUTH_TOKEN: ${{ secrets.STAGING_PLIVO_AUTH_TOKEN }}
+          PLIVO_POWERPACK_UUID: ${{ secrets.STAGING_PLIVO_POWERPACK_UUID }}
+          PLIVO_FROM_NUMBER: ${{ vars.STAGING_PLIVO_FROM_NUMBER }}
+          TWILIO_ACCOUNT_SID: ${{ secrets.STAGING_TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.STAGING_TWILIO_AUTH_TOKEN }}
+          TWILIO_MESSAGING_SERVICE_SID: ${{ secrets.STAGING_TWILIO_MESSAGING_SERVICE_SID }}
+          TWILIO_FROM_NUMBER: ${{ vars.STAGING_TWILIO_FROM_NUMBER }}
+          SMS_SEND_MODE: ${{ vars.STAGING_SMS_SEND_MODE }}
+          SMS_TRACKING_SECRET: ${{ secrets.STAGING_SMS_TRACKING_SECRET }}
+          EMAIL_TRACKING_SECRET: ${{ secrets.STAGING_EMAIL_TRACKING_SECRET }}
+          UNSUBSCRIBE_SECRET: ${{ secrets.STAGING_UNSUBSCRIBE_SECRET }}
+          INTERNAL_CRON_SECRET: ${{ secrets.STAGING_INTERNAL_CRON_SECRET }}
+          GA4_MP_API_SECRET: ${{ secrets.STAGING_GA4_MP_API_SECRET }}
+          GA4_PROPERTY_ID: ${{ vars.STAGING_GA4_PROPERTY_ID }}
+          GA4_APP_PROPERTY_ID: ${{ vars.STAGING_GA4_APP_PROPERTY_ID }}
+          TRACKING_DASHBOARD_TOKEN: ${{ secrets.STAGING_TRACKING_DASHBOARD_TOKEN }}
+          PATIENT_SESSION_SECRET: ${{ secrets.STAGING_PATIENT_SESSION_SECRET }}
+          GOOGLE_CLIENT_ID: ${{ secrets.STAGING_GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.STAGING_GOOGLE_CLIENT_SECRET }}
+          GSC_SERVICE_ACCOUNT_CREDENTIALS: ${{ secrets.STAGING_GSC_SERVICE_ACCOUNT_CREDENTIALS }}
+          GSC_SITE_URL: ${{ vars.STAGING_GSC_SITE_URL }}
+          APPLE_CLIENT_ID: ${{ secrets.STAGING_APPLE_CLIENT_ID }}
+          APPLE_TEAM_ID: ${{ secrets.STAGING_APPLE_TEAM_ID }}
+          APPLE_KEY_ID: ${{ secrets.STAGING_APPLE_KEY_ID }}
+          APPLE_PRIVATE_KEY: ${{ secrets.STAGING_APPLE_PRIVATE_KEY }}
+          DIRECTORY_LINK_SECRET: ${{ secrets.STAGING_DIRECTORY_LINK_SECRET }}
+          ADMIN_USERNAMES: ${{ secrets.STAGING_ADMIN_USERNAMES }}
+          GBP_ENABLED: ${{ vars.STAGING_GBP_ENABLED }}
+          GBP_REGION_CODE: ${{ vars.STAGING_GBP_REGION_CODE }}
+          GBP_GOOGLE_CLIENT_ID: ${{ secrets.STAGING_GBP_GOOGLE_CLIENT_ID }}
+          GBP_GOOGLE_CLIENT_SECRET: ${{ secrets.STAGING_GBP_GOOGLE_CLIENT_SECRET }}
+          GBP_TOKEN_ENC_KEY: ${{ secrets.STAGING_GBP_TOKEN_ENC_KEY }}
+        with:
+          host: ${{ secrets.STAGING_SSH_HOST }}
+          username: ${{ secrets.STAGING_SSH_USER }}
+          key: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          port: ${{ secrets.STAGING_SSH_PORT || '22' }}
+          envs: IMAGE_NAME,DEPLOY_DIR,COMPOSE_PROJECT_NAME,APP_PORT,GHCR_USERNAME,GHCR_TOKEN,DB_ROOT_PASSWORD,NEXT_PUBLIC_DIRECTORY_BASE_URL,NEXT_PUBLIC_BASE_URL,NEXT_PUBLIC_MARKETING_BASE_URL,NEXT_PUBLIC_GA_MEASUREMENT_ID,CONSENTZ_AUTH_API_URL,CONSENTZ_APPLICATION_ID,STRIPE_SECRET_KEY,STRIPE_WEBHOOK_SECRET,SMTP_HOST,SMTP_PORT,SMTP_USER,SMTP_PASS,EMAIL_FROM,ADMIN_EMAIL,SMS_PROVIDER,PLIVO_AUTH_ID,PLIVO_AUTH_TOKEN,PLIVO_POWERPACK_UUID,PLIVO_FROM_NUMBER,TWILIO_ACCOUNT_SID,TWILIO_AUTH_TOKEN,TWILIO_MESSAGING_SERVICE_SID,TWILIO_FROM_NUMBER,SMS_SEND_MODE,SMS_TRACKING_SECRET,EMAIL_TRACKING_SECRET,UNSUBSCRIBE_SECRET,INTERNAL_CRON_SECRET,GA4_MP_API_SECRET,GA4_PROPERTY_ID,GA4_APP_PROPERTY_ID,TRACKING_DASHBOARD_TOKEN,PATIENT_SESSION_SECRET,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,GSC_SERVICE_ACCOUNT_CREDENTIALS,GSC_SITE_URL,APPLE_CLIENT_ID,APPLE_TEAM_ID,APPLE_KEY_ID,APPLE_PRIVATE_KEY,DIRECTORY_LINK_SECRET,ADMIN_USERNAMES,GBP_ENABLED,GBP_REGION_CODE,GBP_GOOGLE_CLIENT_ID,GBP_GOOGLE_CLIENT_SECRET,GBP_TOKEN_ENC_KEY
+          script: |
+            set -euo pipefail
+
+            docker login ghcr.io -u "$GHCR_USERNAME" -p "$GHCR_TOKEN"
+
+            cd "$DEPLOY_DIR"
+            docker compose pull
+            docker compose up -d --remove-orphans
+
+            echo "Deployment completed successfully"
+
+            # Only reclaim dangling/old layers — keep the previous image's layers
+            # cached so the next `docker compose pull` fetches diffs, not the full image.
+            docker image prune -af --filter "until=24h"
+            docker container prune -f
+            echo "Docker cleanup completed"

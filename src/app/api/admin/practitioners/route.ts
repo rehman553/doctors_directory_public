@@ -1,11 +1,40 @@
 import { NextResponse } from 'next/server'
-import { readJsonFile, writeJsonFile } from '@/lib/admin/file-utils'
-import { validatePractitioner } from '@/lib/admin/validators'
+import { isConsentzClinicSlug } from '@/lib/consentz-customers'
+import { prisma } from '@/lib/db'
+import { invalidateSearchCache } from '@/lib/search-cache'
+import { invalidatePractitionersSearchCache } from '@/lib/data-access/practitioners'
+
+export const dynamic = 'force-dynamic'
 
 export async function GET() {
   try {
-    const practitioners = await readJsonFile('derms_processed_new_5403.json')
-    return NextResponse.json(practitioners)
+    const practitioners = await prisma.practitioner.findMany({
+      select: {
+        id: true, slug: true, displayName: true, specialty: true, imageUrl: true, claimed: true, verified: true, claimedPlan: true,
+        clinicAssociations: {
+          orderBy: { clinicId: 'asc' },
+          select: {
+            clinic: {
+              select: { slug: true, rating: true, reviewCount: true, city: { select: { name: true } } },
+            },
+          },
+        },
+      },
+      orderBy: { displayName: 'asc' },
+    })
+    return NextResponse.json(
+      practitioners.map(({ clinicAssociations, ...p }) => {
+        // First association by clinicId = the "primary clinic" used by the public listing.
+        const primary = clinicAssociations[0]?.clinic
+        return {
+          ...p,
+          cityName: primary?.city?.name ?? null,
+          rating: primary?.rating != null ? Number(primary.rating) : null,
+          reviewCount: primary?.reviewCount ?? null,
+          isConsentz: clinicAssociations.some(({ clinic }) => isConsentzClinicSlug(clinic?.slug)),
+        }
+      })
+    )
   } catch (error) {
     console.error('Failed to read practitioners:', error)
     return NextResponse.json({ error: 'Failed to read practitioners' }, { status: 500 })
@@ -14,21 +43,61 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const data = await request.json()
-    const validation = validatePractitioner(data)
+    const body = await request.json()
 
-    if (!validation.success) {
-      console.error('Validation error:', validation.error.errors)
-      return NextResponse.json({ error: 'Invalid practitioner data', details: validation.error.errors }, { status: 400 })
+    const slug = typeof body.slug === 'string' ? body.slug.trim() : ''
+    const displayName = typeof body.displayName === 'string' ? body.displayName.trim() : ''
+    const clinicId = Number(body.clinicId)
+
+    const fieldErrors: Record<string, string> = {}
+    if (!slug) fieldErrors.slug = 'Slug is required'
+    else if (!/^[a-z0-9-]+$/.test(slug)) fieldErrors.slug = 'Slug must be kebab-case'
+    if (!displayName) fieldErrors.displayName = 'Display name is required'
+    if (!clinicId || !Number.isInteger(clinicId) || clinicId <= 0) {
+      fieldErrors.clinicId = 'City is required'
     }
 
-    const practitioners = await readJsonFile('derms_processed_new_5403.json')
-    const updated = [...practitioners, validation.data]
-    await writeJsonFile('derms_processed_new_5403.json', updated)
+    if (Object.keys(fieldErrors).length > 0) {
+      return NextResponse.json(
+        { error: 'Please fix the highlighted fields', fieldErrors },
+        { status: 400 }
+      )
+    }
 
-    return NextResponse.json(validation.data, { status: 201 })
+    const clinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { id: true, cityId: true } })
+    if (!clinic || !clinic.cityId) {
+      return NextResponse.json(
+        { error: 'Selected clinic has no city', fieldErrors: { clinicId: 'Selected clinic has no city' } },
+        { status: 400 }
+      )
+    }
+
+    const record = await prisma.practitioner.create({
+      data: {
+        slug,
+        displayName,
+        title: body.title ?? null,
+        specialty: body.specialty ?? null,
+        imageUrl: body.imageUrl ?? null,
+        qualifications: body.qualifications ?? undefined,
+        awards: body.awards ?? undefined,
+        roles: body.roles ?? undefined,
+        media: body.media ?? undefined,
+        experience: body.experience ?? undefined,
+        clinicAssociations: { create: { clinicId } },
+      },
+    })
+    await invalidateSearchCache()
+    await invalidatePractitionersSearchCache()
+    return NextResponse.json(record, { status: 201 })
   } catch (error) {
     console.error('Failed to create practitioner:', error)
+    if ((error as any).code === 'P2002') {
+      return NextResponse.json(
+        { error: 'A practitioner with this slug already exists', fieldErrors: { slug: 'This slug is already taken' } },
+        { status: 409 }
+      )
+    }
     return NextResponse.json({ error: 'Failed to create practitioner' }, { status: 500 })
   }
 }

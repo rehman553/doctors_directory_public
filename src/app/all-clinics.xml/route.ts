@@ -1,15 +1,20 @@
-import { Clinic } from '@/lib/types'
-import clinicsJson from "@/../public/clinics_processed_new_data.json"
+import { getClinics } from '@/lib/sitemap-data'
+import { isRemovedClinicSlug } from '@/lib/directory-removals'
 import { buildUrlSetXml, encodeCitySegment, encodeSegment, mapPathsToSitemapUrls, xmlResponse } from '@/lib/sitemap'
 
-export async function GET() {
-  const clinics = clinicsJson as unknown as Clinic[]
+export const dynamic = 'force-dynamic'
 
-  const paths = clinics
-    .filter((clinic) => Boolean(clinic.slug) && Boolean(clinic.City))
+export async function GET() {
+  const paths = getClinics()
+    .filter(
+      (clinic) =>
+        Boolean(clinic.slug) &&
+        Boolean(clinic.City) &&
+        !isRemovedClinicSlug(clinic.slug)
+    )
     .map(
       (clinic) =>
-        `/clinics/${encodeCitySegment(clinic.City)}/clinic/${encodeSegment(clinic.slug as string)}`
+        `/clinics/${encodeCitySegment(clinic.City!)}/clinic/${encodeSegment(clinic.slug as string)}`
     )
 
   const xml = buildUrlSetXml(mapPathsToSitemapUrls(paths))

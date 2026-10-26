@@ -3,9 +3,6 @@ import Link from "next/link";
 import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import type { Clinic, City, Practitioner } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
-import { Star, MapPin } from "lucide-react";
-import fs from "fs";
-import path from "path";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -15,16 +12,17 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
-import { ArrowLeft } from "lucide-react"
 import ItemsGrid from "@/components/collectionGrid";
 import { MoreItems } from "@/components/MoreItems";
-import { SearchBar } from "@/components/search/search-bar";
 import { CollectionsFilter } from "@/components/filters/collectionsFilterWrapper";
-import cityJson from "@/../public/city_data_processed.json"
-import clinicsJSON from "@/../public/clinics_processed_new_data.json";
-import PractitionersJSON from "@/../public/derms_processed_new_5403.json";
-import productsJSON from "@/../public/products_processed_new.json";
+import { readJsonFileSync } from "@/lib/json-cache"
 import { locations } from "@/lib/data";
+import { capitalize } from "@/lib/utils";
+import { getPractitionerDirectoryRobots } from "@/lib/practitioner-profile-robots";
+import { toDirectoryCanonical } from "@/lib/seo";
+import { getPractitionersByCity } from "@/lib/data-access/practitioners";
+import { getAllProducts as getAllProductsFromDb } from "@/lib/data-access/products";
+import { IconArrowNarrowLeft } from "@tabler/icons-react";
 
 interface PageProps {
   params: {
@@ -32,54 +30,43 @@ interface PageProps {
   };
 }
 
-export default function CityTreatmentsPage({ params }: PageProps) {
-  const clinics = clinicsJSON as unknown as Clinic[];
-  const practitioners = PractitionersJSON as unknown as Practitioner[];
-  const products = productsJSON as unknown as Array<{ product_category: string; category: string }>;
+export async function generateMetadata({ params }: PageProps) {
+  const citySlug = decodeURIComponent(params.cityslug).toLowerCase();
+  const displayCityName = capitalize(citySlug);
+  const robots = getPractitionerDirectoryRobots();
 
+  return {
+    title: `Top Aesthetic Treatments in ${displayCityName} - Compare Practitioners & Book`,
+    description: `Find top rated aesthetic practitioners and treatments in ${displayCityName}. Compare expertise, reviews and book your consultation today.`,
+    alternates: {
+      canonical: toDirectoryCanonical(`/practitioners/${citySlug}/treatments`),
+    },
+    ...(robots ? { robots } : {}),
+  };
+}
+
+export default async function CityTreatmentsPage({ params }: PageProps) {
   const { cityslug } = params;
+  const displayCityName = capitalize(cityslug);
   const normalizedCitySlug = decodeURIComponent(cityslug).toLowerCase();
-  const cityData: City = (cityJson as unknown as City[]).find(
-    (p) => p.City?.toLowerCase() === normalizedCitySlug
-  )!;
   const decodedCitySlug = decodeURIComponent(cityslug)
     .toLowerCase()
     .replace(/\s+/g, "");
 
-  const aestheticInjectableProducts = products.filter(p => p.category === "Aesthetic Injectables");
+  const [cityPractitioners, productsData] = await Promise.all([
+    getPractitionersByCity(decodedCitySlug),
+    getAllProductsFromDb(),
+  ])
+
+  const cityData: City = (readJsonFileSync<City[]>('city_data_processed.json')).find(
+    (p) => p.City?.toLowerCase() === normalizedCitySlug
+  )!;
+
+  const aestheticInjectableProducts = productsData.filter(p => p.category === "Aesthetic Injectables");
   const aestheticProductCategories = [...new Set(aestheticInjectableProducts.map(p => p.product_category.toLowerCase()))];
 
-  const clinicIndex = new Map(
-    clinics.filter(c => c.slug !== undefined).map(c => [c.slug!, c])
-  );
-
-  const enrichedPractitioners = practitioners
-    .map(p => {
-      try {
-        const clinicSlugs = JSON.parse(p.Associated_Clinics || '[]') as string[];
-        const clinicSlug = clinicSlugs?.[0];
-        if (!clinicSlug) return null;
-        const clinic = clinicIndex.get(clinicSlug);
-        if (!clinic) return null;
-        return {
-          ...clinic,
-          practitioner_name: p.practitioner_name,
-          practitioner_title: p.practitioner_title,
-          practitioner_qualifications: p.practitioner_qualifications,
-          practitioner_awards: p.practitioner_awards,
-        };
-      } catch (error) {
-        console.error('Failed to parse Associated_Clinics:', p.Associated_Clinics, error);
-        return null;
-      }
-    })
-    .filter(Boolean);
-
-  const filteredPractitioners = (enrichedPractitioners as Array<Clinic & { practitioner_name: string; practitioner_title: string }>).filter((practitioner) => {
-    const cityMatch = practitioner.City?.toLowerCase() === decodedCitySlug.toLowerCase();
-    const treatments = practitioner.Treatments ?? [];
-
-    const aestheticMatch = treatments.some((treatment: string) => {
+  const isAestheticMatch = (treatments: string[] | undefined) =>
+    (treatments ?? []).some((treatment: string) => {
       const treatmentLower = treatment.toLowerCase().replace(/\s+/g, "");
       return aestheticProductCategories.some(productCat =>
         treatmentLower.includes(productCat.replace(/\s+/g, "")) ||
@@ -87,8 +74,9 @@ export default function CityTreatmentsPage({ params }: PageProps) {
       );
     });
 
-    return cityMatch && aestheticMatch;
-  });
+  const filteredPractitioners = (cityPractitioners as Array<Clinic & { practitioner_name: string; practitioner_title: string }>).filter(
+    (practitioner) => isAestheticMatch(practitioner.Treatments)
+  );
 
   const uniqueTreatments = [
     ...new Set(
@@ -98,56 +86,52 @@ export default function CityTreatmentsPage({ params }: PageProps) {
     )
   ];
 
-  const defaultPractitioners = (enrichedPractitioners as Array<Clinic & { practitioner_name: string; practitioner_title: string }>).filter(p => p.City === "London" && p.Treatments?.some((t: string) => {
-    const treatmentLower = t.toLowerCase().replace(/\s+/g, "");
-    return aestheticProductCategories.some(productCat =>
-      treatmentLower.includes(productCat.replace(/\s+/g, "")) ||
-      productCat.replace(/\s+/g, "").includes(treatmentLower)
-    );
-  }));
+  let defaultTreatments: string[] = [];
+  if (uniqueTreatments.length === 0) {
+    const londonPractitioners = decodedCitySlug === "london"
+      ? cityPractitioners
+      : await getPractitionersByCity("london");
 
-  const defaultTreatments = [
-    ...new Set(
-      defaultPractitioners
-        .filter(c => Array.isArray(c.Treatments))
-        .flatMap(c => c.Treatments || []).filter((t): t is string => typeof t === "string")
-    )
-  ];
+    const defaultPractitioners = (londonPractitioners as Array<Clinic & { practitioner_name: string; practitioner_title: string }>).filter(
+      (practitioner) => isAestheticMatch(practitioner.Treatments)
+    );
+
+    defaultTreatments = [
+      ...new Set(
+        defaultPractitioners
+          .filter(c => Array.isArray(c.Treatments))
+          .flatMap(c => c.Treatments || []).filter((t): t is string => typeof t === "string")
+      )
+    ];
+  }
 
   if (!cityData) {
     notFound();
   }
 
   return (
-    <main className="bg-(--primary-bg-color)">
-      <SearchBar />
-      <div className="mx-auto max-w-6xl md:px-4 py-4 md:py-12">
+    <main className="bg-white">
+      <div className="mx-auto max-w-7xl md:px-4 py-4 md:py-12">
         <div className="flex flex-col pt-2 w-full pb-4 px-4 md:px-0 md:pt-0 md:border-0 border-b border-[#C4C4C4]">
           <div className="sticky top-0 z-10">
-            <Link className="mb-2 inline-block" href="/" prefetch={false}>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="gap-2 hover:cursor-pointer hover:bg-white hover:text-black"
-              >
-                <ArrowLeft className="h-4 w-4" />
+            <Link className="mb-4 inline-flex items-center gap-3 text-sm hover:underline" href="/" prefetch={false}>
+                <IconArrowNarrowLeft stroke={1.5} className="h-4 w-4" />
                 Back to Directory
-              </Button>
             </Link>
             <Breadcrumb>
               <BreadcrumbList>
                 <BreadcrumbItem>
-                  <BreadcrumbLink href="/directory">Home</BreadcrumbLink>
+                  <BreadcrumbLink href="/">Home</BreadcrumbLink>
                 </BreadcrumbItem>
                 <BreadcrumbSeparator />
                 <BreadcrumbItem>
-                  <BreadcrumbLink href="/directory/practitioners">
+                  <BreadcrumbLink href="/practitioners">
                     All Practitioners
                   </BreadcrumbLink>
                 </BreadcrumbItem>
                 <BreadcrumbSeparator />
                 <BreadcrumbItem>
-                  <BreadcrumbLink href={`/directory/practitioners/${normalizedCitySlug}`}>{cityslug.charAt(0).toUpperCase() + cityslug.slice(1)}</BreadcrumbLink>
+                  <BreadcrumbLink href={`/practitioners/${normalizedCitySlug}`}>{displayCityName}</BreadcrumbLink>
                 </BreadcrumbItem>
                 <BreadcrumbSeparator />
                 <BreadcrumbItem>
@@ -162,11 +146,11 @@ export default function CityTreatmentsPage({ params }: PageProps) {
 
         <div className="flex flex-col pt-2 w-full pb-4 px-4 md:px-0">
           <h1 className="text-sm md:text-2xl md:font-semibold mb-1 md:mb-2">
-            Aesthetic Injectables Practitioners in {cityslug}
+            Aesthetic Injectables Practitioners in {displayCityName}
           </h1>
         </div>
 
-        <div className="mx-auto max-w-7xl md:px-4 py-4 md:py-12 flex flex-col sm:flex-row justify-center w-full md:gap-10">
+        <div className="mx-auto max-w-7xl md:px-4 pb-4 pt-4 md:pb-7flex flex-col sm:flex-row justify-center w-full md:gap-10">
           <CollectionsFilter pageType="Treatments" />
           <div className="flex-1 min-w-0">
             <ItemsGrid items={uniqueTreatments.length === 0 ? defaultTreatments : uniqueTreatments} customLink={`/practitioners/${normalizedCitySlug}/treatments`} />

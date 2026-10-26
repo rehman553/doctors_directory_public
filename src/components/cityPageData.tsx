@@ -1,33 +1,53 @@
 import { City, Practitioner } from "@/lib/types";
-import { decodeUnicodeEscapes, fixMojibake } from "@/lib/utils";
+import { capitalize, sanitizeDisplayText, toUrlSlug } from "@/lib/utils";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
-function createBullets(text:string){
-    const spliText = text.split(";")
-    if(spliText.length <= 1) {
-      return decodeUnicodeEscapes(text)
-    }
-    else {
-      return (
-        <div className='mt-2 space-y-2'>
-         <ul className="list-disc list-inside pl-6 space-y-1">
-          {spliText.map((item, key)=>
-          {const clened_item = decodeUnicodeEscapes(fixMojibake(fixMojibake(fixMojibake(item.trim()))));
-            return (
-          <li className="text-sm leading-relaxed" key={key} > {clened_item.trim().charAt(0).toUpperCase() + clened_item.trim().slice(1)}</li>)})}
-  </ul></div>
-      )
-    }
+function createBullets(text: unknown) {
+  const normalizedText = Array.isArray(text)
+    ? text.filter((item): item is string => typeof item === "string").join("; ")
+    : typeof text === "string"
+      ? text
+      : "";
+
+  if (!normalizedText.trim()) {
+    return null;
   }
+
+  const splitText = normalizedText
+    .split(";")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (splitText.length <= 1) {
+    return sanitizeDisplayText(normalizedText);
+  }
+
+  return (
+    <div className='mt-2 space-y-2'>
+      <ul className="list-disc list-inside pl-6 space-y-1">
+        {splitText.map((item, key) => {
+          const cleanedItem = sanitizeDisplayText(item);
+
+          return (
+            <li className="text-sm leading-relaxed" key={key}>
+              {cleanedItem.trim().charAt(0).toUpperCase() + cleanedItem.trim().slice(1)}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
 type CityPageDataProps = {
     citySlug: string,cityData: City, cityClinics: Practitioner[], uniqueTreatments: string[]
 }
 export function CityPageData({citySlug, cityData, uniqueTreatments}: CityPageDataProps) {
+  const cityName = capitalize(citySlug);
     return (
         <>
-        <div className='bg-white rounded p-4 mb-4'>
+        <div className='bg-white rounded rounded-lg p-4 mb-4 mt-4'>
         <section className="mb-8">
-        <h2 className="text-sm md:text-2xl md:font-semibold mb-1 md:mb-2">About {citySlug}</h2>
+    <h2 className="text-sm md:text-2xl md:font-semibold mb-1 md:mb-2">About {cityName}</h2>
         <section className="space-y-6 text-muted-foreground">
   {/* Overview Section */}
   <div>
@@ -112,7 +132,7 @@ export function CityPageData({citySlug, cityData, uniqueTreatments}: CityPageDat
                   
                   return (
                   
-                <Link data-testid="treatment-link" key={modality} href={`/treatments/${treatments}`}>
+                <Link data-testid="treatment-link" key={modality} href={`/treatments/${toUrlSlug(modality)}`}>
                   <Badge variant="outline" className="text-md bg-gray-100 border-0">
                     {treatments}
                   </Badge>

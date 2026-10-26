@@ -1,0 +1,40 @@
+# Build artefacts
+node_modules
+.next
+
+# Version control
+.git
+.github
+.gitignore
+
+# Tests
+coverage
+tests
+__tests__
+run_tests
+run_tests.py
+playwright-report
+test-results
+
+# Docs & editor files
+*.md
+.DS_Store
+.vscode
+.idea
+
+# Env files (never bake secrets into the image)
+.env
+.env.*
+*.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime-mutable uploads (symlinked to a volume at container start — never bake into image)
+public/images/uploads
+
+# Stray local/scratch files
+*.tmp.js
+*-tmp-*.ts

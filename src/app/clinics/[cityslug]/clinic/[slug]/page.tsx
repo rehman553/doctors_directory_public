@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { Star, ArrowLeft } from "lucide-react";
+import { PageViewTracker } from "@/components/tracking/page-view-tracker";
 import { Button } from "@/components/ui/button";
 import { ProfileHeader } from "@/components/Clinic/profile-header";
 import { GoogleMapsEmbed } from "@/components/gmaps-embed";
@@ -9,8 +9,8 @@ import { BoxPlotDatum, ItemMeta } from "@/lib/types";
 import { Stats } from "@/components/visx-donut";
 import ClinicDetailsMarkdown from "@/components/Clinic/clinicDetailsMD";
 import { Clinic } from "@/lib/types";
-import fs from "fs";
-import path from "path";
+import { getClinicBySlug, getClinicsByCity } from "@/lib/data-access/clinics";
+import { formatPortalScheduleForDisplay } from "@/lib/schedule-check";
 import ClinicTabs from "@/components/Clinic/clinicTabs";
 import {
   Breadcrumb,
@@ -21,11 +21,31 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
 import ItemsGrid from "@/components/collectionGrid";
-import { flattenObject } from "@/lib/utils";
+import { capitalize, flattenObject } from "@/lib/utils";
 import { Section } from "@/components/ui/section";
-import clinicsJson from "@/../public/clinics_processed_new_data.json";
 import { MoreItems } from "@/components/MoreItems";
 import { locations } from "@/lib/data";
+import { ScoreInfoTooltip } from "@/components/score-info-tooltip";
+import { BestRankedBlock } from "@/components/best-ranked-block";
+import { buildClinicRankedEntries } from "@/lib/best-ranked";
+import { CityPricingContext } from "@/components/city-pricing-context";
+import { buildCityTreatmentPriceInsights } from "@/lib/city-pricing";
+import { EventBookingSection } from "@/components/Clinic/event-booking-section";
+import { CoverPhoto } from "@/components/Clinic/cover-photo";
+import { TransparencyBox } from "@/components/Clinic/transparency-box";
+import { AccreditationBadges } from "@/components/Clinic/accreditation-badges";
+import { ReviewsSection, type ReviewItem } from "@/components/Clinic/reviews-section";
+import { prisma } from "@/lib/db";
+import { DirectoryJsonLd } from "@/components/directory-json-ld";
+import { buildMedicalClinicJsonLd } from "@/lib/directory-json-ld";
+import { getClinicDisplayName } from "@/lib/clinic-display";
+import { isRemovedClinicSlug } from "@/lib/directory-removals";
+import { DirectoryStarRating } from "@/components/directory-star-rating";
+import { getClaimState } from "@/lib/claim-utils";
+import { getPortalUser } from "@/lib/portal";
+import { IconArrowNarrowLeft } from "@tabler/icons-react";
+import { applyPrestigeToClinic } from "@/lib/prestige-accreditations";
+import { isConsentzClinicSlug } from "@/lib/consentz-customers";
 function mergeBoxplotDataFromDict(
   base: BoxPlotDatum[],
   incoming: Record<string, ItemMeta>
@@ -44,125 +64,310 @@ interface ProfilePageProps {
   };
 }
 
+// Lightweight converter for SearchClinic (city sidebar / related clinics)
+function convertSearchClinicToOldType(clinic: any): Clinic {
+  return applyPrestigeToClinic({
+    slug: clinic.slug || undefined,
+    image: clinic.image || '',
+    url: undefined,
+    rating: clinic.rating ? Number(clinic.rating) : 0,
+    reviewCount: clinic.reviewCount || 0,
+    category: clinic.category || '',
+    gmapsAddress: clinic.gmapsAddress || '',
+    gmapsPhone: '',
+    City: clinic.City || '',
+    isSaveFace: clinic.isSaveFace,
+    isDoctor: clinic.isDoctor,
+    isJCCP: clinic.isJccp ? [true, ''] : null,
+    isCQC: clinic.isCqc ? [true, ''] : null,
+    isHIW: clinic.isHiw ? [true, ''] : null,
+    isHIS: clinic.isHis ? [true, ''] : null,
+    isRQIA: clinic.isRqia ? [true, ''] : null,
+    Treatments: clinic.Treatments || [],
+    facebook: '', twitter: '', Linkedin: '', instagram: '', youtube: '',
+    website: '', email: '', about_section: '', accreditations: '',
+    awards: '', affiliations: '', hours: '', Practitioners: '',
+    Insurace: '' as any, Payments: '' as any, Fees: [] as any, x_twitter: '',
+    claimed: clinic.claimed ?? false,
+    isConsentz: isConsentzClinicSlug(clinic.slug),
+  } as Clinic);
+}
 
-export default function ProfilePage({ params }: Readonly<ProfilePageProps>) {
-  const clinics = clinicsJson as unknown as Clinic[];
-  const { cityslug,slug } = params;
+function convertDbClinicToOldType(dbClinic: any): Clinic {
+  return applyPrestigeToClinic({
+    slug: dbClinic.slug || undefined,
+    image: dbClinic.image || '',
+    url: dbClinic.gmapsUrl || undefined,
+    rating: dbClinic.rating ? Number(dbClinic.rating) : 0,
+    reviewCount: dbClinic.reviewCount || 0,
+    category: dbClinic.category || '',
+    gmapsAddress: dbClinic.gmapsAddress || '',
+    gmapsPhone: dbClinic.gmapsPhone || '',
+    gmapsReviews: dbClinic.reviews?.map((r: any) => ({
+      reviewer_name: r.reviewerName,
+      rating: r.rating ? Number(r.rating) : 0,
+      review_date: r.reviewDate,
+      review_text: r.reviewText,
+      owner_response: r.ownerResponse,
+    })),
+    reviewAnalysis: dbClinic.reviewAnalysis as any,
+    weighted_analysis: dbClinic.weightedAnalysis as any,
+    ranking: dbClinic.ranking ? {
+      city_rank: dbClinic.ranking.cityRank,
+      city_total: dbClinic.ranking.cityTotal,
+      score_out_of_100: dbClinic.ranking.scoreOutOf100,
+      subtitle_text: dbClinic.ranking.subtitleText,
+    } : undefined,
+    City: dbClinic.city?.name || '',
+    facebook: dbClinic.facebook || '',
+    twitter: dbClinic.twitter || '',
+    Linkedin: dbClinic.linkedin || '',
+    instagram: dbClinic.instagram || '',
+    youtube: dbClinic.youtube || '',
+    website: dbClinic.website || '',
+    email: dbClinic.email || '',
+    isSaveFace: dbClinic.isSaveFace,
+    isDoctor: dbClinic.isDoctor,
+    isJCCP: dbClinic.isJccp ? [dbClinic.isJccp, dbClinic.jccpUrl] : null,
+    isCQC: dbClinic.isCqc ? [dbClinic.isCqc, dbClinic.cqcUrl] : null,
+    isHIW: dbClinic.isHiw ? [dbClinic.isHiw, dbClinic.hiwUrl] : null,
+    isHIS: dbClinic.isHis ? [dbClinic.isHis, dbClinic.hisUrl] : null,
+    isRQIA: dbClinic.isRqia ? [dbClinic.isRqia, dbClinic.rqiaUrl] : null,
+    about_section: dbClinic.aboutSection || '',
+    accreditations: dbClinic.accreditations || '',
+    awards: dbClinic.awards || '',
+    affiliations: dbClinic.affiliations || '',
+    hours: dbClinic.hours?.reduce((acc: any, h: any) => {
+      acc[h.dayOfWeek] = h.hours;
+      return acc;
+    }, {}) || '',
+    Practitioners: dbClinic.staff?.map((s: any) => s.fullName).join(', ') || '',
+    Insurace: (dbClinic.insuranceInfo || []) as any,
+    Payments: (dbClinic.paymentMethods || []) as any,
+    Fees: (dbClinic.fees?.map((f: any) => ({
+      treatment: f.treatmentName,
+      price: f.price,
+    })) || []) as any,
+    x_twitter: dbClinic.xTwitter || '',
+    Treatments: dbClinic.treatments?.map((t: any) => t.treatment.name) || [],
+    claimed: dbClinic.claimed ?? false,
+    isConsentz: isConsentzClinicSlug(dbClinic.slug),
+    verified: (dbClinic as any).verified ?? false,
+    domainVerified: (dbClinic as any).domainVerified ?? false,
+    gbpMatch: (dbClinic as any).gbpMatch ?? false,
+    gbpVerified: (dbClinic as any).gbpVerified ?? false,
+    idVerified: (dbClinic as any).idVerified ?? false,
+    manualVerified: (dbClinic as any).manualVerified ?? false,
+  } as Clinic);
+}
+
+export default async function ProfilePage({ params }: Readonly<ProfilePageProps>) {
+  const { cityslug, slug } = params;
+  if (isRemovedClinicSlug(slug)) {
+    notFound();
+  }
+  const displayCityName = capitalize(cityslug);
   const normalizedCitySlug = decodeURIComponent(cityslug).toLowerCase();
-  const cityClinics: Clinic[] = clinics.filter(
-    (p) => p.City?.toLowerCase() === normalizedCitySlug
-  );
-  const uniqueTreatments = [
-  ...new Set(
-    cityClinics
-      .filter(c => Array.isArray(c.Treatments))
-      .flatMap(c => c.Treatments).filter((t): t is string => typeof t === "string")
-  )
-];
 
-  const clinic = clinics.find((p) => p.slug === slug);
+  const [dbClinic, platformReviews] = await Promise.all([
+    getClinicBySlug(slug),
+    prisma.platformReview.findMany({
+      where: { clinic: { slug }, status: 'approved' },
+      orderBy: { createdAt: 'desc' },
+    }),
+  ]);
+  if (!dbClinic || dbClinic.isHidden) {
+    notFound();
+  }
+
+  const [claimState, portalUser] = await Promise.all([
+    getClaimState({ claimed: dbClinic.claimed, entityType: 'clinic', slug: dbClinic.slug }),
+    getPortalUser(),
+  ]);
+  const goToProfileHref = portalUser ? `/portal/${portalUser.entityType}` : '/portal/login';
+  const isOwner = portalUser?.entityType === 'clinic' && portalUser.entitySlug === dbClinic.slug;
+
+  const dbCityClinics = await getClinicsByCity(normalizedCitySlug);
+  const clinic = convertDbClinicToOldType(dbClinic);
+  const cityClinics = dbCityClinics
+    .filter((c) => c.slug !== slug && !isRemovedClinicSlug(c.slug))
+    .map(convertSearchClinicToOldType);
+  const rankedCityClinics = buildClinicRankedEntries(cityClinics, 5);
+  const uniqueTreatments = [
+    ...new Set([
+      ...(Array.isArray(clinic.Treatments) ? clinic.Treatments.filter((t): t is string => typeof t === "string") : []),
+      ...cityClinics
+        .filter(c => Array.isArray(c.Treatments))
+        .flatMap(c => c.Treatments).filter((t): t is string => typeof t === "string"),
+    ])
+  ];
+  // Prefer the clinic's portal-configured booking schedule over the static scraped hours.
+  const portalSchedule = formatPortalScheduleForDisplay(dbClinic.claimRequests[0]?.scheduleJson);
 
   const hoursObj = clinic?.hours as unknown as Record<string, any>;
 
-  const hours = 
+  const hours =
     (hoursObj && typeof hoursObj === 'object' && hoursObj["Typical_hours_listed_in_directories"]) ?? clinic?.hours;
-  const flatHours = typeof hoursObj === 'object' && hoursObj !== null ? flattenObject(hours) : hours
-
- 
-
+  const flatHours = portalSchedule ?? (typeof hoursObj === 'object' && hoursObj !== null ? flattenObject(hours) : hours)
 
   const boxplotData = mergeBoxplotDataFromDict(
     boxplotDatas_clinic,
     clinic?.weighted_analysis ?? {}
   );
 
+  const combinedReviews: ReviewItem[] = [
+    ...platformReviews.map(r => ({
+      id: `p-${r.id}`,
+      source: 'platform' as const,
+      patientName: r.patientName,
+      rating: r.rating,
+      reviewText: r.reviewText,
+      reviewDate: null,
+      treatment: r.treatment,
+      isVerifiedPatient: r.isVerifiedPatient,
+      clinicResponse: r.clinicResponse,
+      respondedAt: r.respondedAt,
+      createdAt: r.createdAt,
+    })),
+    ...(dbClinic.reviews ?? []).map(r => ({
+      id: `g-${r.id}`,
+      source: 'google' as const,
+      patientName: r.reviewerName ?? 'Anonymous',
+      rating: r.rating ? Math.round(Number(r.rating)) : 0,
+      reviewText: r.reviewText ?? '',
+      reviewDate: r.reviewDate,
+      treatment: null,
+      isVerifiedPatient: false,
+      clinicResponse: r.ownerResponse,
+      respondedAt: null,
+      createdAt: null,
+    })).filter(r => r.reviewText),
+  ];
+
   const overallScore = Math.round(
     boxplotData.find((datum) => datum.label === "Overall Aggregation")?.item.weighted_score ?? 0
   );
   const rankingSubtitle =
-    clinic?.ranking?.subtitle_text ?? `${overallScore}/100 in ${clinic?.City ?? cityslug}`;
-
-  if (!clinic) {
-    notFound();
-  }
+    clinic?.ranking?.subtitle_text ?? `${overallScore}/100 in ${clinic?.City ?? displayCityName}`;
+  const clinicDisplayName = getClinicDisplayName({ slug: clinic.slug, url: clinic.url });
+  const medicalClinicSchema = buildMedicalClinicJsonLd(clinic, clinicDisplayName);
 
   return (
+    <>
+      <PageViewTracker />
+      {medicalClinicSchema ? <DirectoryJsonLd schemas={[medicalClinicSchema]} /> : null}
     <main className="min-h-screen bg-background">
+      <CoverPhoto src={dbClinic.coverImage} alt={`${dbClinic.name ?? slug} cover photo`} />
+
       {/* Navigation */}
       <div className="bg-card/50 backdrop-blur-sm sticky top-0 z-10">
-        <div className="container mx-auto max-w-6xl px-4 py-4">
-          <Link className="mb-2 inline-block" href="/" prefetch={false}>
+        <div className="container mx-auto max-w-7xl px-4 py-4">
+          <Link className="mb-3 inline-block" href="/" prefetch={false}>
             <Button
               variant="ghost"
               size="sm"
               className="gap-2 hover:cursor-pointer hover:bg-white hover:text-black"
             >
-              <ArrowLeft className="h-4 w-4" />
+              <IconArrowNarrowLeft stroke={1.5} className="h-4 w-4" />
               Back to Directory
             </Button>
           </Link>
-        </div>
-        <div className="container mx-auto max-w-6xl px-4 py-2">
           <Breadcrumb>
           <BreadcrumbList>
             <BreadcrumbItem>
-              <BreadcrumbLink href="/directory">Home</BreadcrumbLink>
+              <BreadcrumbLink href="/">Home</BreadcrumbLink>
             </BreadcrumbItem>
             <BreadcrumbSeparator />
             <BreadcrumbItem>
-              <BreadcrumbLink href="/directory/clinics">Clinics</BreadcrumbLink>
+              <BreadcrumbLink href="/clinics">Clinics</BreadcrumbLink>
             </BreadcrumbItem>
             <BreadcrumbSeparator />
             <BreadcrumbItem>
-              <BreadcrumbLink href={`/directory/clinics/${normalizedCitySlug}`}>{`${cityslug}`}</BreadcrumbLink>
+              <BreadcrumbLink href={`/clinics/${normalizedCitySlug}`}>{displayCityName}</BreadcrumbLink>
             </BreadcrumbItem>
             <BreadcrumbSeparator />
             <BreadcrumbItem>
-              <BreadcrumbPage>{`${clinic.slug}`}</BreadcrumbPage>
+              <BreadcrumbPage>{capitalize(clinic.slug!)}</BreadcrumbPage>
             </BreadcrumbItem>
           </BreadcrumbList>
           </Breadcrumb>
         </div>
       </div>
 
-      <div className="container mx-auto max-w-6xl pt-0 md:px-4 py-20 space-y-8">
-        <ProfileHeader clinic={clinic} />
+      <div className="container mx-auto max-w-7xl pt-0 md:px-4 py-20 space-y-8">
+        <ProfileHeader
+          clinic={clinic}
+          clinicName={dbClinic.name ?? undefined}
+          hasCoreCalendar={dbClinic.coreClinicId !== null && dbClinic.claimedPlan !== 'free'}
+          claimState={claimState}
+          goToProfileHref={goToProfileHref}
+          isOwner={isOwner}
+        />
+
 
         <div className="px-4 md:px-0">
           <ClinicTabs />
 
           <div className="grid grid-cols-1 gap-8 lg:grid-cols-10 mb-4">
-            <div className="order-2 lg:order-1 col-span-1 lg:col-span-6">
+            <div className="order-2 lg:order-1 col-span-1 lg:col-span-6 space-y-8">
               <ClinicDetailsMarkdown clinic={clinic} />
+              <ReviewsSection
+                clinicSlug={slug}
+                reviews={combinedReviews}
+                googleReviewCount={clinic.reviewCount ?? 0}
+                googleRating={clinic.rating ?? 0}
+              />
             </div>
 
             <div className="order-1 lg:order-2 col-span-1 lg:col-span-4">
-              <div className="border border-gray-300 rounded-xl p-6">
-                <div className="flex flex-row gap-2 pt-2 mb-4 items-center justify-center text-sm">
-                  <div className="inline-flex items-center gap-1">
-                    <div className="flex items-center">
-                      {Array.from({ length: 5 }, (_, i) => (
-                        <Star
-                          key={i}
-                          className={`h-4 w-4 ${
-                            i < clinic.rating ? "fill-black text-black" : "/30"
-                          }`}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                  <span
-                    className="border-l border-black pl-2 underline"
-                    aria-label={`${clinic.reviewCount} reviews`}
-                  >
-                    {clinic.reviewCount
-                      ? clinic.reviewCount + "+ Reviews Analysed"
-                      : "0"}
-                  </span>
+              <div className="mb-4 space-y-4">
+                <EventBookingSection clinicSlug={slug} entityName={dbClinic.name ?? undefined} />
+                <AccreditationBadges
+                  isConsentz={clinic.isConsentz}
+                  isSaveFace={clinic.isSaveFace}
+                  isDoctor={clinic.isDoctor}
+                  isJccp={clinic.isJCCP ? clinic.isJCCP[0] : null}
+                  jccpUrl={clinic.isJCCP ? clinic.isJCCP[1] : null}
+                  isCqc={clinic.isCQC ? clinic.isCQC[0] : null}
+                  cqcUrl={clinic.isCQC ? clinic.isCQC[1] : null}
+                  isHiw={clinic.isHIW ? clinic.isHIW[0] : null}
+                  hiwUrl={clinic.isHIW ? clinic.isHIW[1] : null}
+                  isHis={clinic.isHIS ? clinic.isHIS[0] : null}
+                  hisUrl={clinic.isHIS ? clinic.isHIS[1] : null}
+                  isRqia={clinic.isRQIA ? clinic.isRQIA[0] : null}
+                  rqiaUrl={clinic.isRQIA ? clinic.isRQIA[1] : null}
+                  aestheticsAwards={clinic.aestheticsAwards}
+                  tatlerGuideYears={clinic.tatlerGuideYears}
+                  awardsBadgeLabel={clinic.awardsBadgeLabel}
+                  tatlerBadgeLabel={clinic.tatlerBadgeLabel}
+                />
+                <TransparencyBox
+                  claimedAt={dbClinic.claimedAt}
+                  cqcStatus={dbClinic.cqcStatus}
+                  avgReplyTime={dbClinic.avgReplyTime}
+                />
+              </div>
+              <div className="border border-gray-300 rounded-lg p-6">
+                <DirectoryStarRating
+                  reviewCount={clinic.reviewCount ?? 0}
+                  reviewsLabel={
+                    clinic.reviewCount
+                      ? `${clinic.reviewCount}+ Reviews Analysed`
+                      : "0"
+                  }
+                  className="justify-center pt-2 mb-4"
+                />
+                <div className="border-t border-gray-300 my-4"></div>
+                <div className="mb-4 flex items-center justify-center gap-2">
+                  <h3 className="text-center text-lg font-semibold text-foreground">
+                    Consentz® Clinic Score
+                  </h3>
+                  <ScoreInfoTooltip entityLabel="clinic" />
                 </div>
-                <div className="border-t border-gray-300 my-6"></div>
                 <Stats data={boxplotData} />
-                <p className="mt-3 text-xs text-gray-600">{rankingSubtitle}</p>
+                <p className="mt-3 text-xs font-medium text-black">
+                  {rankingSubtitle}
+                </p>
               </div>
               {/* HOURS */}
               {flatHours && (
@@ -239,13 +444,28 @@ export default function ProfilePage({ params }: Readonly<ProfilePageProps>) {
           </div>
         </div>
         <div className="px-4 md:px-0 space-y-6">
-          <h3 className="text-lg font-semibold text-foreground mb-2">{`Top Treatments in ${cityslug}`}</h3>
+          <h3 className="text-lg font-semibold text-foreground mb-2">{`Top Treatments in ${displayCityName}`}</h3>
           <MoreItems items={uniqueTreatments} />
           <h3 className="text-lg font-semibold text-foreground mb-2">{`Top Cities in the UK`}</h3>
           <MoreItems items={locations} />
         </div>
+        <div className="px-4 md:px-0 space-y-4">
+          <BestRankedBlock
+            title={`Best Clinics in ${clinic.City}`}
+            entries={rankedCityClinics}
+          />
+          {cityClinics.length > 0 && (
+            <CityPricingContext
+              city={displayCityName}
+              insights={buildCityTreatmentPriceInsights(cityClinics, displayCityName, 1)}
+              variant="light"
+            />
+          )}
+        </div>
+
       </div>
     </main>
+    </>
   );
 }
 
@@ -261,33 +481,55 @@ export default function ProfilePage({ params }: Readonly<ProfilePageProps>) {
 // }
 
 export async function generateMetadata({ params }: ProfilePageProps) {
-  const filePath = path.join(process.cwd(), "public", "clinics_processed_new_data.json");
-  const fileContents = fs.readFileSync(filePath, "utf-8");
-  const clinics: Clinic[] = JSON.parse(fileContents);
-  const clinic = clinics.find((p) => p.slug === params.slug);
+  if (isRemovedClinicSlug(params.slug)) {
+    notFound();
+  }
 
-  if (!clinic) {
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "https://staging.consentz.com";
+  const citySlug = decodeURIComponent(params.cityslug).toLowerCase();
+  const canonicalUrl = `${baseUrl}/directory/clinics/${citySlug}/clinic/${params.slug}`;
+
+  const dbClinic = await getClinicBySlug(params.slug);
+
+  if (!dbClinic) {
     return {
-      title: "Practitioner Not Found",
+      title: "Clinic Not Found",
+      alternates: {
+        canonical: canonicalUrl,
+      },
     };
   }
 
-  const clinicName = clinic.slug;
+  const clinic = convertDbClinicToOldType(dbClinic);
+  const clinicDisplayName = capitalize(clinic.slug!);
+  const city = capitalize(params.cityslug);
+  const topTreatments = Array.isArray(clinic.Treatments) ? clinic.Treatments.slice(0, 3).map((t: string) => capitalize(t)) : [];
+  const treatmentSuffix = topTreatments.length >= 3
+    ? `${topTreatments[0]}, ${topTreatments[1]} & ${topTreatments[2]}`
+    : topTreatments.length === 2
+    ? `${topTreatments[0]} & ${topTreatments[1]}`
+    : topTreatments.length === 1
+    ? topTreatments[0]
+    : 'Botox, Fillers & Skin Treatments';
+  const title = `${clinicDisplayName} ${city} - Reviews, Prices & Booking - ${treatmentSuffix}`;
+  const description = `Compare ${clinicDisplayName} in ${city}. See prices, reviews, treatments, and book consultations instantly.`;
 
   return {
-    title: `${clinicName} - Healthcare Directory`,
-    description: `View the profile of ${clinicName}, a qualified ${clinic.category} offering professional healthcare services. Read reviews and book appointments.`,
+    title,
+    description,
+    alternates: {
+      canonical: canonicalUrl,
+    },
     openGraph: {
-      title: `${clinicName} - Consentz`,
-      description: `View the profile of ${clinicName}, a qualified ${clinic.category} offering professional healthcare services. Read reviews and book appointments.`,
-      images: [
-        {
-          url: clinic.image,
-          width: 1200,
-          height: 630,
-          alt: `${clinicName} profile picture`,
-        },
-      ],
+      title,
+      description,
+      url: canonicalUrl,
+      type: "website",
+    },
+    twitter: {
+      card: "summary",
+      title,
+      description,
     },
   };
 }

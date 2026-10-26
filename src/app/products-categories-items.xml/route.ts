@@ -1,17 +1,24 @@
-import productsJson from '@/../public/products_processed_new.json'
 import {
   buildUrlSetXml,
   encodeSegment,
   mapPathsToSitemapUrls,
   xmlResponse,
 } from '@/lib/sitemap'
-import { Product } from '@/lib/types'
+import { getAllProducts } from '@/lib/data-access/products'
+import { isRedirectedCategorySlug } from '@/lib/product-removals'
+
+export const dynamic = 'force-dynamic'
 
 export async function GET() {
-  const products = productsJson as unknown as Product[]
+  const products = await getAllProducts()
 
   const paths = products
-    .filter((product) => Boolean(product.slug) && Boolean(product.category))
+    .filter(
+      (product) =>
+        Boolean(product.slug) &&
+        Boolean(product.category) &&
+        !isRedirectedCategorySlug(product.slug)
+    )
     .map(
       (product) =>
         `/products/category/${encodeSegment(product.category)}/${encodeSegment(product.slug)}`

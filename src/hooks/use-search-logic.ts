@@ -3,8 +3,11 @@
 import { useState, useEffect, startTransition } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useSearchStore } from "@/app/stores/datastore";
+import { trackSearchUsage, type SearchDestination } from "@/lib/tracking/client";
+import { resolveValidatedDirectorySearchHref } from "@/app/actions/directory-search-routing";
+import type { TreatmentSearchOption } from "@/lib/uk-treatment-search";
 
-export function useSearchLogic() {
+export function useSearchLogic(treatmentSearchOptions: TreatmentSearchOption[] = []) {
   const pathname = usePathname();
   const isSearchPage = pathname.includes("/search");
   const { filters, setFilters } = useSearchStore();
@@ -16,22 +19,17 @@ export function useSearchLogic() {
   const [activeDropdown, setActiveDropdown] = useState<'type' | 'category' | 'location' | null>(null);
 
   const [localFilters, setLocalFilters] = useState(() => {
-    if (pathname.includes("/treatments")) {
+    if (pathname.includes("/treatments") && filters.type !== "Treatments") {
       return { ...filters, type: "Treatments" };
     }
     return filters;
   });
 
   useEffect(() => {
-    if (pathname.includes("/treatments")) {
-      setLocalFilters({ ...filters, type: "Treatments" });
-      return;
-    }
-
     setLocalFilters(filters);
-  }, [filters, pathname]);
+  }, [pathname, filters]);
 
-  const options = pathname.includes("/treatments") ? ["Treatments"] : ["Practitioner", "Clinic", "Product", "Treatments"];
+  const options = ["Practitioner", "Clinic", "Product", "Treatments"];
 
   const getDynamicPlaceholderText = () => {
     let parts = [];
@@ -57,16 +55,72 @@ export function useSearchLogic() {
 
   const handleSearch = async () => {
     setIsLoading(true);
-    setFilters(localFilters);
+    const trimmedFilters = {
+      ...localFilters,
+      query: localFilters.query?.trim() ?? localFilters.query,
+      location: localFilters.location?.trim() ?? localFilters.location,
+    };
     setShowResults(false);
     setIsExpanded(false);
+
+    const categoryHref = await resolveValidatedDirectorySearchHref(
+      {
+        type: trimmedFilters.type || "",
+        query: trimmedFilters.query || "",
+        location: trimmedFilters.location || "",
+      },
+      treatmentSearchOptions
+    );
+
+    const onTreatmentsPage = pathname.includes("/treatments");
+    const keepsTreatmentsPage = onTreatmentsPage && trimmedFilters.type === "Treatments";
+    let destination: SearchDestination;
+    let destinationPath: string;
+    if (categoryHref) {
+      destination = "category_page";
+      destinationPath = categoryHref;
+    } else if (keepsTreatmentsPage) {
+      destination = "treatments";
+      destinationPath = "/treatments";
+    } else {
+      destination = "search_results";
+      destinationPath = "/search";
+    }
+
+    void trackSearchUsage({
+      query: trimmedFilters.query,
+      type: trimmedFilters.type,
+      category: trimmedFilters.category,
+      location: trimmedFilters.location,
+      trigger: "searchbar",
+      destination,
+      destinationPath,
+    });
+
+    if (categoryHref) {
+      setFilters(trimmedFilters);
+      setLocalFilters(trimmedFilters);
+      router.push(categoryHref);
+      setIsLoading(false);
+      return;
+    }
+
+    setFilters(trimmedFilters);
+    setLocalFilters(trimmedFilters);
+
+    if (pathname.includes("/treatments") && trimmedFilters.type !== "Treatments") {
+      router.push("/search");
+      setIsLoading(false);
+      return;
+    }
+
     startTransition(() => {
       if (pathname.includes("/treatments")) {
         router.push("/treatments?" + new URLSearchParams({
-          query: localFilters.query || "",
-          type: localFilters.type || "",
-          category: localFilters.category || "",
-          location: localFilters.location || "",
+          query: trimmedFilters.query || "",
+          type: trimmedFilters.type || "",
+          category: trimmedFilters.category || "",
+          location: trimmedFilters.location || "",
         }).toString());
       } else {
         router.push("/search");

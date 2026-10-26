@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
+import { toUrlSlug } from '@/lib/utils'
 
-const DEFAULT_BASE_URL = 'https://staging.consentz.com'
+const DEFAULT_BASE_URL = 'https://www.consentz.com'
 
 export interface SitemapUrl {
   loc: string
@@ -16,14 +17,33 @@ export const getBaseUrl = (): string =>
 
 export const toDirectoryUrl = (pathname: string): string => {
   const normalized = pathname.startsWith('/') ? pathname : `/${pathname}`
-  return `${getBaseUrl()}/directory${normalized}`
+  const withSlash =
+    normalized.endsWith('/') || normalized.endsWith('.xml')
+      ? normalized
+      : `${normalized}/`
+  return `${getBaseUrl()}/directory${withSlash}`
 }
 
+export const toBusinessHubUrl = (pathname: string): string => toDirectoryUrl(pathname)
+
+export const mapBusinessHubPathsToSitemapUrls = (
+  paths: ReadonlyArray<string>,
+  lastmod = nowIso(),
+  changefreq: SitemapUrl['changefreq'] = 'weekly',
+  priority = 0.7
+): SitemapUrl[] =>
+  paths.map((path) => ({
+    loc: toBusinessHubUrl(path),
+    lastmod,
+    changefreq,
+    priority,
+  }))
+
 export const encodeSegment = (value: string): string =>
-  encodeURIComponent(value.trim())
+  encodeURIComponent(toUrlSlug(value))
 
 export const encodeCitySegment = (value: string): string =>
-  encodeSegment(value.toLowerCase())
+  encodeSegment(value)
 
 // Keep dynamic route params as a single path segment even when source text contains slash-like chars.
 export const encodeSegmentForRouteParam = (value: string): string =>
@@ -94,6 +114,7 @@ export const buildSitemapIndexXml = (
 export const xmlResponse = (xml: string): NextResponse =>
   new NextResponse(xml, {
     headers: {
-      'Content-Type': 'application/xml',
+      'Content-Type': 'application/xml; charset=utf-8',
+      'Cache-Control': 'public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800',
     },
   })

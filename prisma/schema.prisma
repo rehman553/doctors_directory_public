@@ -1,0 +1,1350 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum DayOfWeek {
+  Monday
+  Tuesday
+  Wednesday
+  Thursday
+  Friday
+  Saturday
+  Sunday
+}
+
+enum AdviceItemType {
+  strength
+  gap
+  priority_30d
+  priority_90d
+}
+
+enum ClaimEntityType {
+  clinic
+  practitioner
+}
+
+enum ClaimStatus {
+  pending_otp
+  otp_verified
+  pending_approval
+  approved
+  rejected
+  awaiting_consentz_link
+  deleted
+}
+
+enum ClaimPlan {
+  free
+  pay_per_lead
+  subscription
+}
+
+// How the Core clinic/user was provisioned: a brand-new Core account created by the
+// directory's approve flow (registerConsentzClinic/registerConsentzPractitioner), vs an
+// already-existing Core account the claimant linked via the consentz-link SSO flow.
+enum CoreRegistrationType {
+  new_registration
+  existing_link
+}
+
+enum VerificationStatus {
+  pending
+  approved
+  rejected
+}
+
+enum LeadStatus {
+  new
+  contacted
+  booked
+  lost
+  spam
+  archived
+  closed
+}
+
+enum LeadSource {
+  consultation
+  pricing
+}
+
+enum BookingStatus {
+  pending
+  confirmed
+  cancelled
+  completed
+  no_show
+}
+
+enum CqcStatus {
+  not_applicable
+  good
+  requires_improvement
+  outstanding
+}
+
+enum AvgReplyTime {
+  within_24hrs
+  within_48hrs
+  more_than_48hrs
+}
+
+enum ReviewStatus {
+  pending
+  approved
+  rejected
+}
+
+enum ChatSender {
+  patient
+  clinic
+}
+
+enum ChatSessionStatus {
+  active
+  closed
+}
+
+enum GbpConnectionStatus {
+  pending_location // OAuth complete, no location bound yet
+  connected
+  needs_reauth // refresh token rejected — clinic must reconnect
+  revoked
+}
+
+enum GbpPhotoCategory {
+  COVER
+  PROFILE
+  LOGO
+  EXTERIOR
+  INTERIOR
+  PRODUCT
+  AT_WORK
+  TEAMS
+  ADDITIONAL
+}
+
+// ============================================================
+// CITIES
+// ============================================================
+
+model City {
+  id   Int    @id @default(autoincrement())
+  slug String @unique @db.VarChar(120)
+  name String @db.VarChar(120)
+
+  // Overview
+  populationEstimate            String? @db.VarChar(255)
+  lifestyleCharacteristics      String? @db.Text
+  medicalInfrastructurePresence String? @db.Text
+
+  // Market Size
+  numClinics              Int?     @default(0)
+  reviewVolumeTotal       Int?     @default(0)
+  averageRatingCitywide   Decimal? @db.Decimal(3, 2)
+  estimatedMarketStrength String?  @db.Text
+
+  // Competitor Landscape
+  nhsPresence String? @db.Text
+
+  // Regulatory Environment
+  primaryRegulator        String? @db.Text
+  prescribingRequirements String? @db.Text
+  inspectionFramework     String? @db.Text
+
+  // Insurance & Financing
+  privateInsuranceUsage       String? @db.Text
+  cosmeticFinanceAvailability String? @db.Text
+
+  // Referral Networks
+  teachingHospitalLinks String? @db.Text
+
+  // Accessibility
+  publicTransportProximity   String? @db.Text
+  parkingAvailability        String? @db.Text
+  cityVsSuburbanDistribution String? @db.Text
+
+  // Medical Tourism
+  tourismVolumeIndicator  String? @db.Text
+  hotelDensityNearClinics String? @db.Text
+  airportProximity        String? @db.Text
+  medicalTourismViability String? @db.Text
+
+  // Beauty Spend
+  marketMaturityLevel String? @db.Text
+
+  // JSON — display-only arrays, never filtered in SQL
+  specializations    Json? // string[]
+  peakBookingPeriods Json? // string[]
+  socialMediaTrends  Json? // string[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clinics Clinic[]
+
+  @@map("cities")
+}
+
+// ============================================================
+// CLINICS
+// ============================================================
+
+model Clinic {
+  id     Int    @id @default(autoincrement())
+  slug   String @unique @db.VarChar(255)
+  cityId Int?
+
+  // Identity
+  name         String? @db.VarChar(255)
+  image        String? @db.Text
+  gmapsUrl     String? @db.Text
+  gmapsAddress String? @db.VarChar(500)
+  gmapsPhone   String? @db.VarChar(200)
+  category     String? @db.VarChar(100)
+
+  // Reputation
+  rating      Decimal? @db.Decimal(3, 2)
+  reviewCount Int?     @default(0)
+
+  // About
+  aboutSection   String? @db.Text
+  accreditations String? @db.Text
+  awards         String? @db.Text
+  affiliations   String? @db.Text
+
+  // Contact / Social
+  website   String? @db.VarChar(500)
+  email     String? @db.VarChar(255)
+  facebook  String? @db.VarChar(500)
+  twitter   String? @db.VarChar(500)
+  xTwitter  String? @db.VarChar(500)
+  instagram String? @db.VarChar(500)
+  youtube   String? @db.VarChar(500)
+  linkedin  String? @db.VarChar(500)
+
+  // Regulatory Flags
+  isSaveFace Boolean @default(false)
+  isDoctor   Boolean @default(false)
+  isJccp     Boolean @default(false)
+  jccpUrl    String? @db.VarChar(500)
+  isCqc      Boolean @default(false)
+  cqcUrl     String? @db.VarChar(500)
+  isHiw      Boolean @default(false)
+  hiwUrl     String? @db.VarChar(500)
+  isHis      Boolean @default(false)
+  hisUrl     String? @db.VarChar(500)
+  isRqia     Boolean @default(false)
+  rqiaUrl    String? @db.VarChar(500)
+
+  // JSON — display-only, not queried with SQL predicates
+  insuranceInfo     Json? // string[]
+  paymentMethods    Json? // string[]
+  reviewAnalysis    Json? // ReviewAnalysis object
+  weightedAnalysis  Json? // { [category]: ItemMeta }
+  criteriaBreakdown Json? // { [category]: CriteriaItem[] }
+  advice            Json? // { strengths, gaps, priority_30d, priority_90d }
+
+  // Claim & trust flags
+  claimed        Boolean    @default(false)
+  claimedAt      DateTime?
+  claimedPlan    ClaimPlan?
+  verified       Boolean    @default(false)
+  domainVerified Boolean    @default(false)
+  gbpMatch       Boolean    @default(false)
+  gbpVerified    Boolean    @default(false)
+  idVerified     Boolean    @default(false)
+
+  // GBP mirror — structured fields pushed to / pulled from Google Business Profile.
+  // placeId is also the source for the public "write a Google review" deep link and
+  // works without an OAuth connection (entered manually or parsed from gmapsUrl).
+  placeId                 String?   @db.VarChar(255)
+  gbpPrimaryPhone         String?   @db.VarChar(50)
+  additionalPhones        Json? // string[]
+  gbpPrimaryCategoryId    String?   @db.VarChar(100) // gcid:...
+  gbpPrimaryCategoryName  String?   @db.VarChar(255)
+  gbpAdditionalCategories Json? // { id: string, name: string }[] (max 9)
+  gbpServiceArea          Json? // { businessType, places: { placeInfos: {placeName, placeId}[] } }
+  gbpBookingUrl           String?   @db.VarChar(1000)
+  gbpFieldsUpdatedAt      DateTime?
+  manualVerified Boolean    @default(false)
+  isHidden       Boolean    @default(false)
+
+  // Cold-outreach campaign — claim-invite emails to unclaimed clinics
+  campaignOptedOut            Boolean   @default(false)
+  campaignEmailedAt           DateTime?
+  campaignEmailReadAt         DateTime? // when the claim-invite open-tracking pixel was first hit
+  directoryRemovalRequestedAt DateTime?
+
+  // Lead-notification SMS — per-clinic override for the global SMS_SEND_MODE.
+  // null = use the env default; "fallback" = SMS only when email is missing/failed;
+  // "always" = SMS on every lead with a valid phone; "off" = never (also set by a STOP reply).
+  smsNotifyMode String? @db.VarChar(10)
+
+  // Self-serve GDPR account deletion — set when the claimer requests deletion from
+  // the portal. Listing is hidden immediately; a daily sweep hard-purges (reverts to
+  // unclaimed + anonymises the claim) once this timestamp has passed.
+  scheduledDeletionAt DateTime?
+
+  // Profile enhancements
+  coverImage   String?       @db.Text
+  cqcStatus    CqcStatus?
+  avgReplyTime AvgReplyTime?
+
+  // Consentz Core — populated at claim approval; used for calendar + booking API calls
+  coreClinicId          Int?      @unique
+  coreRegistrationType  CoreRegistrationType?
+  coreUnlinkRequestedAt DateTime?
+
+  // Stripe — stored after PPL SetupIntent completes so we can charge per-lead unlock
+  stripeCustomerId         String?    @db.VarChar(255)
+  // Subscription lifecycle — kept in sync by webhook handlers
+  stripeSubscriptionStatus String?    @db.VarChar(50) // active | past_due | unpaid | canceled | cancel_at_period_end
+  subscriptionCancelAt     DateTime? // set when cancel_at_period_end=true; cleared when restored
+  downgradeToPlan          ClaimPlan? // pending downgrade target; applied by webhook when subscription actually ends
+  // GA4 client id — copied from the claim on approval, refreshed on portal pings.
+  // Attributes server-side Measurement Protocol events (lead-unlock purchase, …).
+  gaClientId               String?    @db.VarChar(64)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  city                     City?                           @relation(fields: [cityId], references: [id], onDelete: SetNull)
+  hours                    ClinicHour[]
+  fees                     ClinicFee[]
+  reviews                  ClinicReview[]
+  ranking                  ClinicRanking?
+  treatments               ClinicTreatment[]
+  staff                    ClinicStaff[]
+  practitionerAssociations PractitionerClinicAssociation[]
+  claimRequests            ClaimRequest[]
+  consultationLeads        ConsultationLead[]
+  bookings                 Booking[]
+  platformReviews          PlatformReview[]
+  chatSessions             ChatSession[]
+  presence                 ClinicPresence?
+  gbpConnection            GbpConnection?
+  address                  ClinicAddress?
+  hourPeriods              ClinicHourPeriod[]
+  services                 ClinicService[]
+  photos                   ClinicPhoto[]
+  reviewRequests           ReviewRequest[]
+  privateFeedback          PrivateFeedback[]
+
+  @@index([cityId])
+  @@index([rating])
+  @@index([category])
+  @@index([reviewCount])
+  @@index([claimed, campaignOptedOut, campaignEmailedAt])
+  @@map("clinics")
+}
+
+model ClinicHour {
+  id        Int       @id @default(autoincrement())
+  clinicId  Int
+  dayOfWeek DayOfWeek
+  hours     String?   @db.VarChar(100)
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, dayOfWeek])
+  @@map("clinic_hours")
+}
+
+model ClinicFee {
+  id            Int     @id @default(autoincrement())
+  clinicId      Int
+  treatmentName String  @db.VarChar(255)
+  price         String? @db.VarChar(500)
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId])
+  @@map("clinic_fees")
+}
+
+model ClinicReview {
+  id            Int      @id @default(autoincrement())
+  clinicId      Int
+  reviewerName  String?  @db.VarChar(255)
+  rating        Decimal? @db.Decimal(2, 1)
+  reviewDate    String?  @db.VarChar(100)
+  reviewText    String?  @db.Text
+  ownerResponse String?  @db.Text
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId])
+  @@map("clinic_reviews")
+}
+
+model ClinicRanking {
+  id            Int     @id @default(autoincrement())
+  clinicId      Int     @unique
+  cityRank      Int?    @db.SmallInt
+  cityTotal     Int?    @db.SmallInt
+  scoreOutOf100 Int?    @db.TinyInt
+  subtitleText  String? @db.VarChar(255)
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@map("clinic_rankings")
+}
+
+model ClinicStaff {
+  id             Int     @id @default(autoincrement())
+  clinicId       Int
+  fullName       String? @db.VarChar(255)
+  title          String? @db.VarChar(300)
+  specialty      Json?
+  linkedinUrl    String? @db.VarChar(500)
+  profileUrl     Json?
+  practitionerId Int? // FK set when this staff entry resolves to a Practitioner row
+
+  clinic       Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  practitioner Practitioner? @relation(fields: [practitionerId], references: [id], onDelete: SetNull)
+
+  @@index([clinicId])
+  @@map("clinic_staff")
+}
+
+model ClinicTreatment {
+  clinicId    Int
+  treatmentId Int
+
+  clinic    Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  treatment Treatment @relation(fields: [treatmentId], references: [id], onDelete: Cascade)
+
+  @@id([clinicId, treatmentId])
+  @@map("clinic_treatments")
+}
+
+// ============================================================
+// TREATMENTS
+// ============================================================
+
+model Treatment {
+  id          Int     @id @default(autoincrement())
+  slug        String  @unique @db.VarChar(255)
+  name        String  @db.VarChar(255)
+  description String? @db.Text
+
+  // JSON — rich content, all 17 semantic fields from treatments.json
+  goals              Json? // string[] or { goals, notes }
+  prosAndCons        Json? // { pros: string[], cons: string[] }
+  cost               Json? // { typicalCosts, whyItVaries } — shape varies
+  choosingDoctor     Json? // string[] or { advice, notes }
+  alternatives       Json? // string[] or { comparison, notes }
+  goodCandidate      Json? // string[] or { typical, notIdeal, notes }
+  preparation        Json? // string[] or { advice }
+  safetyAndPain      Json? // { safety: string|string[], pain: string }
+  howLongResultsLast Json? // string, array, or { duration }
+  mildVsSevere       Json? // { mildCases, severeCases, limitations }
+  whatHappensDuring  Json? // string, array, or { process, duration }
+  recovery           Json? // { recovery, sideEffects } — shape varies
+  regulation         Json? // string[] or { regulation, ifSomethingGoesWrong }
+  maintenance        Json? // string or { maintenance }
+  qualifications     Json? // string[] or { whatToSeek, notes }
+  niceGuidelines     Json? // { guidelines } or { UK, USA }
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clinicTreatments       ClinicTreatment[]
+  practitionerTreatments PractitionerTreatment[]
+
+  @@map("treatments")
+}
+
+// ============================================================
+// PRACTITIONERS
+// ============================================================
+
+model Practitioner {
+  id          Int     @id @default(autoincrement())
+  slug        String  @unique @db.VarChar(255)
+  displayName String? @db.Text
+  title       String? @db.Text
+  specialty   String? @db.VarChar(255)
+  imageUrl    String? @db.Text
+
+  // JSON — profile display arrays, never used as SQL filter
+  qualifications   Json? // string[]
+  roles            Json? // string[]
+  awards           Json? // string[]
+  media            Json? // string[]
+  experience       Json? // string[]
+  weightedAnalysis Json? // { [category]: ItemMeta }
+
+  // Claim & trust flags
+  claimed        Boolean    @default(false)
+  claimedAt      DateTime?
+  claimedPlan    ClaimPlan?
+  verified       Boolean    @default(false)
+  affiliated     Boolean    @default(false)
+  licensed       Boolean    @default(false)
+  idVerified     Boolean    @default(false)
+  manualVerified Boolean    @default(false)
+  isHidden       Boolean    @default(false)
+
+  // Stripe — stored after PPL SetupIntent completes / subscription created via portal upgrade
+  stripeCustomerId         String?    @db.VarChar(255)
+  // Subscription lifecycle — kept in sync by webhook handlers
+  stripeSubscriptionStatus String?    @db.VarChar(50) // active | past_due | unpaid | canceled | cancel_at_period_end
+  subscriptionCancelAt     DateTime? // set when cancel_at_period_end=true; cleared when restored
+  downgradeToPlan          ClaimPlan? // pending downgrade target; applied by webhook when subscription actually ends
+  // GA4 client id — copied from the claim on approval; for server-side MP events.
+  gaClientId               String?    @db.VarChar(64)
+
+  // Consentz Core — set when claimed via Consentz link; used for calendar + booking API calls
+  coreClinicId         Int?
+  coreRegistrationType CoreRegistrationType?
+
+  // Self-serve GDPR account deletion — same lifecycle as Clinic.scheduledDeletionAt
+  scheduledDeletionAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ranking            PractitionerRanking?
+  clinicAssociations PractitionerClinicAssociation[]
+  treatments         PractitionerTreatment[]
+  staffEntries       ClinicStaff[]
+  claimRequests      ClaimRequest[]
+
+  @@index([displayName(length: 191)])
+  @@index([specialty])
+  @@map("practitioners")
+}
+
+model PractitionerRanking {
+  id             Int     @id @default(autoincrement())
+  practitionerId Int     @unique
+  cityRank       Int?    @db.SmallInt
+  cityTotal      Int?    @db.SmallInt
+  scoreOutOf100  Int?    @db.TinyInt
+  subtitleText   String? @db.VarChar(255)
+
+  practitioner Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+
+  @@map("practitioner_rankings")
+}
+
+model PractitionerClinicAssociation {
+  practitionerId Int
+  clinicId       Int
+
+  practitioner Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+  clinic       Clinic       @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@id([practitionerId, clinicId])
+  @@map("practitioner_clinic_associations")
+}
+
+model PractitionerTreatment {
+  practitionerId Int
+  treatmentId    Int
+
+  practitioner Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+  treatment    Treatment    @relation(fields: [treatmentId], references: [id], onDelete: Cascade)
+
+  @@id([practitionerId, treatmentId])
+  @@map("practitioner_treatments")
+}
+
+// ============================================================
+// PRODUCTS
+// ============================================================
+
+model Product {
+  id                 Int     @id @default(autoincrement())
+  slug               String  @unique @db.VarChar(255)
+  productName        String  @db.VarChar(255)
+  productCategory    String? @db.VarChar(255)
+  productSubcategory String? @db.VarChar(255)
+  category           String? @db.VarChar(100)
+
+  // Commercial
+  brand              String? @db.VarChar(255)
+  manufacturer       String? @db.Text
+  distributor        String? @db.VarChar(500)
+  distributorCleaned String? @db.VarChar(255)
+  sku                String? @db.VarChar(255)
+
+  // Media
+  imageUrl       String? @db.Text
+  documentPdfUrl String? @db.Text
+
+  // Content
+  description       String? @db.Text
+  treatmentDuration String? @db.Text
+  onsetOfEffect     String? @db.Text
+
+  // Compliance
+  mhraApproved String? @db.VarChar(255)
+  ceMarked     String? @db.VarChar(255)
+  mhraLink     String? @db.VarChar(500)
+
+  // About
+  brandAbout  String? @db.Text
+  sellerAbout String? @db.Text
+
+  // Verification
+  sourceVerifiedOn               DateTime? @db.Date
+  dataConfidenceScore            Decimal?  @db.Decimal(5, 2)
+  isAestheticsDermatologyRelated Boolean?
+
+  // JSON — product detail page arrays, never used as SQL filters
+  keyBenefits         Json? // string[]
+  indications         Json? // string[]
+  composition         Json? // string[]
+  formulation         Json? // string[]
+  packaging           Json? // string[]
+  usageInstructions   Json? // string[]
+  contraindications   Json? // string[]
+  adverseEffects      Json? // string[]
+  storageConditions   Json? // string[]
+  certifications      Json? // string[]
+  verificationSources Json? // string[]
+  allPrices           Json? // price map / array
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([brand])
+  @@index([productCategory])
+  @@index([distributorCleaned])
+  @@map("products")
+}
+
+// ============================================================
+// ACCREDITATION BODIES
+// ============================================================
+
+model AccreditationBody {
+  id    Int     @id @default(autoincrement())
+  slug  String  @unique @db.VarChar(255)
+  image String? @db.MediumText // base64 string or image URL
+
+  // Overview
+  overviewDescription String? @db.Text
+  foundedYear         String? @db.VarChar(255)
+  founder             String? @db.VarChar(255)
+  purpose             String? @db.Text
+
+  // Governing Body
+  governingOrgName String? @db.VarChar(255)
+  companyStatus    String? @db.Text
+  regulatoryStatus String? @db.Text
+  industryStanding String? @db.Text
+
+  // Eligibility
+  eligibilityWhoCanApply String? @db.Text
+
+  // Accreditation Requirements
+  inspectionRequired String? @db.Text
+
+  // Verification Process
+  publicRegister              String? @db.VarChar(255)
+  certificateValidationMethod String? @db.Text
+
+  // Renewal & Compliance
+  renewalFrequency String? @db.Text
+  cpdRequirements  String? @db.Text
+  auditProcess     String? @db.Text
+
+  // Benefits
+  reputation         String? @db.Text
+  patientTrustImpact String? @db.Text
+
+  // Government Regulation
+  statutoryBacking String? @db.Text
+  regulatedBy      String? @db.VarChar(255)
+  legalStatus      String? @db.Text
+
+  // JSON — static reference arrays, rendered on detail page only
+  eligibilityRequirements Json? // string[]
+  eligibilityRestrictions Json? // string[]
+  evaluationFactors       Json? // string[]
+  availableCategories     Json? // string[]
+  documentationRequired   Json? // string[]
+  complianceStandards     Json? // string[]
+  protectionMechanisms    Json? // string[]
+  limitations             Json? // string[]
+  comparableEntities      Json? // string[]
+  keyDifferences          Json? // string[]
+  mediaMentions           Json? // string[]
+  endorsements            Json? // string[]
+  credibilitySignals      Json? // string[]
+  faqs                    Json? // { question: string, answer: string }[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("accreditation_bodies")
+}
+
+model DirectoryEvent {
+  id           BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  timestamp    DateTime @db.DateTime(3)
+  pageUrl      String   @map("page_url") @db.Text
+  pageType     String   @map("page_type") @db.VarChar(64)
+  referrer     String   @db.Text
+  country      String   @default("unknown") @db.VarChar(8)
+  deviceType   String   @default("desktop") @map("device_type") @db.VarChar(16)
+  ctaLabel     String   @map("cta_label") @db.VarChar(255)
+  ctaTargetUrl String?  @map("cta_target_url") @db.Text
+
+  @@index([pageType], map: "idx_directory_events_page_type")
+  @@index([timestamp], map: "idx_directory_events_timestamp")
+  @@map("directory_events")
+}
+
+model DirectoryLead {
+  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  timestamp  DateTime @db.DateTime(3)
+  pageUrl    String   @map("page_url") @db.Text
+  pageType   String   @map("page_type") @db.VarChar(64)
+  referrer   String   @db.Text
+  country    String   @default("unknown") @db.VarChar(8)
+  deviceType String   @default("desktop") @map("device_type") @db.VarChar(16)
+  name       String   @db.VarChar(255)
+  contact    String   @db.VarChar(255)
+  treatment  String?  @db.VarChar(255)
+  location   String?  @db.VarChar(255)
+  budget     String?  @db.VarChar(255)
+
+  @@index([pageType], map: "idx_directory_leads_page_type")
+  @@index([timestamp], map: "idx_directory_leads_timestamp")
+  @@map("directory_leads")
+}
+
+// ============================================================
+// CLAIM REQUESTS
+// ============================================================
+
+model ClaimRequest {
+  id         Int             @id @default(autoincrement())
+  entityType ClaimEntityType @default(clinic)
+
+  // Entity — exactly one is set
+  clinicId         Int?
+  clinicSlug       String? @db.VarChar(255)
+  practitionerId   Int?
+  practitionerSlug String? @db.VarChar(255)
+
+  // Claimer details
+  claimerName  String  @db.VarChar(255)
+  claimerEmail String  @db.VarChar(255)
+  claimerPhone String? @db.VarChar(50)
+
+  // Clinic-specific inputs
+  clinicNameInput    String? @db.VarChar(255)
+  clinicPhone        String? @db.VarChar(50)
+  clinicWebsite      String? @db.VarChar(500)
+  googleBusinessLink String? @db.VarChar(500)
+
+  // Practitioner-specific inputs
+  profession    String? @db.VarChar(255)
+  licenseNumber String? @db.VarChar(100)
+  registryName  String? @db.VarChar(255)
+
+  // OTP verification
+  otpCode       String?   @db.VarChar(10)
+  otpExpiresAt  DateTime?
+  otpVerifiedAt DateTime?
+
+  // Auto-verification results (set at otp_verified time)
+  domainVerified Boolean @default(false)
+  affiliated     Boolean @default(false)
+
+  // Anti-fraud
+  requiresManualReview Boolean @default(false)
+
+  // Attribution — captured client-side from the `dd_attr` first-touch cookie when
+  // the claim is created (or re-read server-side from the same cookie as a fallback).
+  // Answers "which page did this Consentz sign-up come from". No PII.
+  attributionSource      String? @db.VarChar(32) // home | blog | business_hub | directory
+  attributionLandingPage String? @db.VarChar(512)
+  attributionReferrer    String? @db.VarChar(512)
+  utmSource              String? @db.VarChar(128)
+  utmMedium              String? @db.VarChar(128)
+  utmCampaign            String? @db.VarChar(191)
+  // GA4 client id captured at plan selection — lets the server-side `purchase`
+  // and `sign_up` Measurement Protocol events stitch to the same GA user.
+  gaClientId             String? @db.VarChar(64)
+
+  // New business registration (no existing Clinic/Practitioner row yet)
+  isNewRegistration Boolean @default(false)
+  newListingData    String? @db.LongText // raw JSON string of submitted business details
+
+  // Plan & Stripe
+  selectedPlan         ClaimPlan?
+  stripeSessionId      String?    @db.VarChar(255)
+  stripeCustomerId     String?    @db.VarChar(255)
+  stripeSubscriptionId String?    @db.VarChar(255)
+
+  // Consentz account provisioning (set on admin approval)
+  consentzClinicId   Int?
+  consentzUserId     Int?
+  consentzUsername   String? @db.VarChar(100)
+  mustResetPassword  Boolean @default(false)
+  scheduleWizardDone Boolean @default(false)
+  scheduleConfigured Boolean @default(false)
+  scheduleJson       String? @db.Text
+
+  // Consentz link token (used when claimant already has a Consentz account)
+  linkToken          String?   @unique @db.VarChar(80)
+  linkTokenExpiresAt DateTime?
+  linkTokenUsed      Boolean   @default(false)
+
+  // Workflow
+  status     ClaimStatus @default(pending_otp)
+  adminNotes String?     @db.Text
+  approvedAt DateTime?
+  rejectedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clinic       Clinic?       @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  practitioner Practitioner? @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId])
+  @@index([practitionerId])
+  @@index([status])
+  @@index([claimerEmail])
+  @@index([attributionSource])
+  @@map("claim_requests")
+}
+
+// ============================================================
+// ID / MANUAL VERIFICATION
+// ============================================================
+
+model VerificationRequest {
+  id           Int             @id @default(autoincrement())
+  entityType   ClaimEntityType
+  entitySlug   String          @db.VarChar(255)
+  claimerName  String          @db.VarChar(255)
+  claimerEmail String          @db.VarChar(255)
+
+  // Uploaded file names (stored in ./uploads/verification/{id}/)
+  govIdFile  String? @db.VarChar(255)
+  selfieFile String? @db.VarChar(255)
+  proofType  String? @db.VarChar(50) // work_email|contract|website|letter
+  proofFile  String? @db.VarChar(255)
+
+  status     VerificationStatus @default(pending)
+  adminNotes String?            @db.Text
+  reviewedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([entitySlug])
+  @@index([status])
+  @@map("verification_requests")
+}
+
+// ============================================================
+// CONSULTATION LEADS
+// ============================================================
+
+model ConsultationLead {
+  id            Int        @id @default(autoincrement())
+  clinicId      Int
+  patientName   String?    @db.VarChar(200) // null for simplified unclaimed-clinic enquiries (no name collected)
+  patientPhone  String?    @db.VarChar(30) // null when the patient left phone blank (optional on the enquiry form)
+  patientEmail  String?    @db.VarChar(255)
+  treatment     String?    @db.VarChar(255)
+  contactReason String?    @db.VarChar(80) // canonical reason value for unclaimed-clinic enquiries (see src/lib/consultation-reasons.ts)
+  preferredTime String?    @db.VarChar(100) // "morning", "afternoon", "evening"
+  location      String?    @db.VarChar(255) // city/area for context
+  source        LeadSource @default(consultation)
+
+  status LeadStatus @default(new)
+
+  // Unlock (PPL plan — patient data revealed on £15 payment)
+  isUnlocked            Boolean   @default(false)
+  unlockedAt            DateTime?
+  stripePaymentIntentId String?   @db.VarChar(255)
+
+  // Ghost lead — clinic was unclaimed when lead was submitted
+  isGhostLead     Boolean   @default(false)
+  ghostNotifiedAt DateTime? // when FOMO email was sent to clinic's public contact
+
+  // Clinic notification email — sent when a lead comes in (ghost hook, PPL teaser, or full notification)
+  notificationEmailTo     String?   @db.VarChar(255) // recipient the notification email was sent to
+  notificationEmailSentAt DateTime? // when the notification email successfully sent
+  notificationEmailReadAt DateTime? // when the open-tracking pixel was first hit
+
+  // Clinic notification SMS — via the active provider adapter (Plivo/Twilio), sent
+  // alongside or instead of the email (see SMS_PROVIDER / SMS_SEND_MODE / Clinic.smsNotifyMode)
+  notificationSmsTo          String?   @db.VarChar(20) // E.164 number the SMS was sent to
+  notificationSmsSid         String?   @db.VarChar(64) // provider message id (Twilio SID / Plivo MessageUUID) — correlates the status webhook
+  notificationSmsStatus      String?   @db.VarChar(20) // queued | sent | delivered | undelivered | failed
+  notificationSmsSentAt      DateTime? // when the provider accepted the message
+  notificationSmsDeliveredAt DateTime? // carrier delivery receipt (status webhook)
+  notificationSmsReadAt      DateTime? // when the clinic first tapped the tracked link in the SMS
+
+  // Pipeline CRM fields
+  pipelineStatus LeadStatus @default(new)
+  notes          String?    @db.Text
+  ownerName      String?    @db.VarChar(100)
+  coreSynced     Boolean    @default(false)
+
+  // Read tracking for nav badge
+  seenAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  patientId Int?
+
+  clinic  Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+
+  @@index([clinicId])
+  @@index([isUnlocked])
+  @@index([seenAt])
+  @@index([createdAt])
+  @@index([patientId])
+  @@index([pipelineStatus])
+  @@index([notificationSmsSid])
+  @@map("consultation_leads")
+}
+
+// ============================================================
+// BOOKINGS  (synced from Consentz Core calendar)
+// ============================================================
+
+model Booking {
+  id       Int @id @default(autoincrement())
+  clinicId Int
+
+  // Core CRM reference — set when synced; null for directory-only bookings
+  coreBookingId String? @unique @db.VarChar(255)
+
+  patientName  String  @db.VarChar(200)
+  patientPhone String  @db.VarChar(30)
+  patientEmail String? @db.VarChar(255)
+  treatment    String? @db.VarChar(255)
+  notes        String? @db.Text
+
+  slotStart DateTime
+  slotEnd   DateTime
+
+  status                BookingStatus @default(pending)
+  // Stripe deposit — populated if patient paid at booking time
+  stripePaymentIntentId String?       @db.VarChar(255)
+  depositAmount         Decimal?      @db.Decimal(10, 2)
+
+  // Sync metadata
+  syncedFromCore Boolean   @default(false)
+  lastSyncedAt   DateTime?
+
+  patientId Int?
+
+  // Video call fields — set when booked via /api/call/[slug]
+  videoCallMeetingId String? @db.VarChar(255)
+  videoCallJoinUrl   String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clinic  Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+
+  @@index([clinicId])
+  @@index([slotStart])
+  @@index([status])
+  @@index([coreBookingId])
+  @@index([patientId])
+  @@map("bookings")
+}
+
+// ============================================================
+// PLATFORM REVIEWS  (Consentz-verified, separate from Google)
+// ============================================================
+
+model PlatformReview {
+  id                Int          @id @default(autoincrement())
+  clinicId          Int
+  patientId         Int?
+  patientName       String       @db.VarChar(200)
+  rating            Int          @db.TinyInt // 1–5
+  reviewText        String       @db.Text
+  treatment         String?      @db.VarChar(255)
+  isVerifiedPatient Boolean      @default(false)
+  status            ReviewStatus @default(pending)
+  clinicResponse    String?      @db.Text
+  respondedAt       DateTime?
+  approvedAt        DateTime?
+  rejectedAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clinic  Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient Patient? @relation(fields: [patientId], references: [id])
+
+  @@unique([clinicId, patientId])
+  @@index([clinicId])
+  @@index([status])
+  @@map("platform_reviews")
+}
+
+// ============================================================
+// CONSULTATION CHAT
+// ============================================================
+
+model ChatSession {
+  id                 Int               @id @default(autoincrement())
+  clinicId           Int
+  visitorToken       String            @unique @db.VarChar(64)
+  patientName        String?           @db.VarChar(200)
+  patientEmail       String?           @db.VarChar(255)
+  patientPhone       String?           @db.VarChar(30)
+  status             ChatSessionStatus @default(active)
+  // Consentz Core reference — populated when conversation is pushed (stub, implement later)
+  coreConversationId String?           @db.VarChar(255)
+  // Timestamp of the newest message the clinic has viewed — drives unread badges
+  clinicLastReadAt   DateTime?
+  // Timestamp of the newest message the patient has viewed — drives unread badges
+  patientLastReadAt  DateTime?
+  closedAt           DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  patientId Int?
+
+  clinic   Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient  Patient?      @relation(fields: [patientId], references: [id], onDelete: SetNull)
+  messages ChatMessage[]
+
+  @@index([clinicId])
+  @@index([status])
+  @@index([patientId])
+  @@map("chat_sessions")
+}
+
+model ChatMessage {
+  id            Int        @id @default(autoincrement())
+  sessionId     Int
+  sender        ChatSender
+  content       String     @db.Text
+  // Consentz Core reference — populated when message is pushed (stub, implement later)
+  coreMessageId String?    @db.VarChar(255)
+  createdAt     DateTime   @default(now())
+
+  session ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([createdAt])
+  @@map("chat_messages")
+}
+
+model ClinicPresence {
+  id         Int      @id @default(autoincrement())
+  clinicId   Int      @unique
+  lastSeenAt DateTime @default(now())
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@map("clinic_presence")
+}
+
+// ============================================================
+// GOOGLE BUSINESS PROFILE CONNECTOR
+// ============================================================
+
+// Per-clinic OAuth link to Google Business Profile. Access token is short-lived and
+// stored plaintext; the refresh token is encrypted at rest (AES-256-GCM) via
+// src/lib/gbp/crypto.ts — cipher/iv/tag are stored as separate base64 columns.
+model GbpConnection {
+  id       Int @id @default(autoincrement())
+  clinicId Int @unique
+
+  accessToken          String?   @db.Text
+  accessTokenExpiresAt DateTime?
+  refreshTokenCipher   String?   @db.Text
+  refreshTokenIv       String?   @db.VarChar(32)
+  refreshTokenTag      String?   @db.VarChar(32)
+  scope                String?   @db.VarChar(500)
+  googleEmail          String?   @db.VarChar(255)
+
+  // Binding — populated at the location-picker step
+  accountName    String? @db.VarChar(255) // "accounts/123"
+  locationName   String? @db.VarChar(255) // "locations/456" (Business Information API v1)
+  locationV4Name String? @db.VarChar(255) // "accounts/123/locations/456" (Media/Reviews v4 parent)
+  placeId        String? @db.VarChar(255)
+  newReviewUri   String? @db.VarChar(1000)
+  mapsUri        String? @db.VarChar(1000)
+
+  status         GbpConnectionStatus @default(pending_location)
+  lastPulledAt   DateTime?
+  lastSyncedAt   DateTime?
+  lastSyncError  String?             @db.Text
+  syncFieldState Json? // { [field]: "ok" | "error: ..." } from the last sync run
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@map("gbp_connections")
+}
+
+// Structured postal address mirroring GBP storefrontAddress. gmapsAddress (single line,
+// used in search predicates) is regenerated from these parts on every save.
+model ClinicAddress {
+  id                Int      @id @default(autoincrement())
+  clinicId          Int      @unique
+  regionCode        String?  @db.VarChar(2) // "GB"
+  languageCode      String?  @db.VarChar(10) // "en-GB"
+  postalCode        String?  @db.VarChar(20)
+  administrativeArea String? @db.VarChar(120)
+  locality          String?  @db.VarChar(120)
+  sublocality       String?  @db.VarChar(120)
+  addressLines      Json? // string[]
+  latitude          Decimal? @db.Decimal(9, 6)
+  longitude         Decimal? @db.Decimal(9, 6)
+  source            String   @default("manual") @db.VarChar(20) // manual | gbp
+  updatedAt         DateTime @updatedAt
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@map("clinic_addresses")
+}
+
+// GBP regularHours.periods — supports split shifts / multiple periods per day, which the
+// legacy ClinicHour (@@unique([clinicId, dayOfWeek])) cannot. Collapsed into ClinicHour
+// free-text rows on save so the public hours renderer is untouched.
+model ClinicHourPeriod {
+  id        Int       @id @default(autoincrement())
+  clinicId  Int
+  openDay   DayOfWeek
+  openTime  String    @db.VarChar(5) // "09:00"
+  closeDay  DayOfWeek
+  closeTime String    @db.VarChar(5) // "17:30"
+  sortOrder Int       @default(0)
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId])
+  @@map("clinic_hour_periods")
+}
+
+// GBP serviceItems — richer than ClinicFee. ClinicFee is kept for the existing Fees panel.
+model ClinicService {
+  id          Int      @id @default(autoincrement())
+  clinicId    Int
+  name        String   @db.VarChar(255)
+  description String?  @db.VarChar(1000)
+  priceUnits  Int? // whole currency units (GBP major); null = "price on request"
+  priceNanos  Int? // sub-unit (GBP API shape)
+  currency    String?  @default("GBP") @db.VarChar(3)
+  categoryId  String?  @db.VarChar(100) // gcid the structured item attaches to
+  isFreeForm  Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  source      String   @default("manual") @db.VarChar(20) // manual | gbp
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId])
+  @@map("clinic_services")
+}
+
+model ClinicPhoto {
+  id           Int              @id @default(autoincrement())
+  clinicId     Int
+  url          String           @db.Text // local uploaded URL, or lh3.googleusercontent.com URL when source=gbp
+  category     GbpPhotoCategory @default(ADDITIONAL)
+  sortOrder    Int              @default(0)
+  gbpMediaName String?          @db.VarChar(255) // "accounts/../locations/../media/.." after upload
+  gbpState     String?          @db.VarChar(30) // PROCESSING | PROCESSED | REJECTED
+  uploadError  String?          @db.Text
+  source       String           @default("manual") @db.VarChar(20) // manual | gbp
+  createdAt    DateTime         @default(now())
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId])
+  @@map("clinic_photos")
+}
+
+// Per-patient review-collection link. Follows PatientMagicLink: sha256 hash stored,
+// expiring, single-use.
+model ReviewRequest {
+  id               Int       @id @default(autoincrement())
+  clinicId         Int
+  tokenHash        String    @unique @db.VarChar(64)
+  patientName      String?   @db.VarChar(200)
+  patientEmail     String?   @db.VarChar(255)
+  channel          String    @default("link") @db.VarChar(10) // link | email
+  createdByClaimId Int?
+  issuedAt         DateTime  @default(now())
+  emailSentAt      DateTime?
+  expiresAt        DateTime
+  usedAt           DateTime?
+
+  clinic   Clinic           @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  feedback PrivateFeedback?
+
+  @@index([clinicId])
+  @@map("review_requests")
+}
+
+// Private rating + comment captured via a ReviewRequest link. Never public by default;
+// the clinic can promote one to a PlatformReview (pending admin moderation).
+model PrivateFeedback {
+  id                    Int       @id @default(autoincrement())
+  clinicId              Int
+  reviewRequestId       Int?      @unique
+  rating                Int       @db.TinyInt // 1-5
+  comment               String    @db.Text
+  submitterName         String?   @db.VarChar(200)
+  ipHash                String?   @db.VarChar(64)
+  submittedAt           DateTime  @default(now())
+  googlePromptShownAt   DateTime?
+  googleReviewClickedAt DateTime?
+  publishedReviewId     Int?      @unique // PlatformReview.id once promoted
+  publishedAt           DateTime?
+
+  clinic        Clinic         @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  reviewRequest ReviewRequest? @relation(fields: [reviewRequestId], references: [id], onDelete: SetNull)
+
+  @@index([clinicId])
+  @@map("private_feedback")
+}
+
+model MainSiteEvent {
+  id           BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  timestamp    DateTime @db.DateTime(3)
+  pageUrl      String   @map("page_url") @db.Text
+  referrer     String   @db.Text
+  country      String   @default("unknown") @db.VarChar(8)
+  deviceType   String   @default("desktop") @map("device_type") @db.VarChar(16)
+  eventType    String   @map("event_type") @db.VarChar(64)
+  eventName    String   @map("event_name") @db.VarChar(255)
+  targetUrl    String?  @map("target_url") @db.Text
+  contentType  String?  @map("content_type") @db.VarChar(64)
+  contentSlug  String?  @map("content_slug") @db.VarChar(255)
+  contactName  String?  @map("contact_name") @db.VarChar(255)
+  contactValue String?  @map("contact_value") @db.VarChar(255)
+  metaJson     String?  @map("meta_json") @db.LongText
+
+  @@index([timestamp], map: "idx_main_site_events_timestamp")
+  @@index([eventType], map: "idx_main_site_events_event_type")
+  @@index([eventName], map: "idx_main_site_events_event_name")
+  @@index([contentType], map: "idx_main_site_events_content_type")
+  @@map("main_site_events")
+}
+
+// ============================================================
+// PATIENT ACCOUNTS
+// ============================================================
+
+model Patient {
+  id            Int      @id @default(autoincrement())
+  email         String   @unique @db.VarChar(255)
+  firstName     String?  @db.VarChar(100)
+  lastName      String?  @db.VarChar(100)
+  phone         String?  @db.VarChar(30)
+  emailVerified Boolean  @default(false)
+  passwordHash  String?  @db.VarChar(255)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  dateOfBirth DateTime? @map("date_of_birth")
+
+  // Consentz patient account — populated on first booking
+  consentzPassword         String?   @db.VarChar(255)
+  consentzSessionToken     String?   @db.VarChar(512)
+  consentzRefreshToken     String?   @db.VarChar(512)
+  consentzSessionExpiresAt DateTime?
+  consentzRefreshExpiresAt DateTime?
+
+  bookings        Booking[]
+  chatSessions    ChatSession[]
+  leads           ConsultationLead[]
+  oauthAccounts   PatientOAuthAccount[]
+  platformReviews PlatformReview[]
+  consents        PatientConsent[]
+
+  @@map("patients")
+}
+
+enum ConsentCheckbox {
+  share
+  privacy
+  age
+  terms
+}
+
+// Append-only audit trail — one row per checkbox per submission. Never updated
+// or deleted; a withdrawal is a new row with ticked=false, not a mutation of
+// the original. patientId is nullable/SetNull (not Cascade) so GDPR account
+// deletion anonymises rather than destroys the proof-of-consent history.
+model PatientConsent {
+  id           Int             @id @default(autoincrement())
+  patientId    Int?
+  checkbox     ConsentCheckbox
+  ticked       Boolean
+  wordingShown String          @db.Text
+  formVersion  String          @db.VarChar(20)
+  createdAt    DateTime        @default(now())
+
+  patient Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+
+  @@index([patientId])
+  @@map("patient_consents")
+}
+
+model PatientMagicLink {
+  id        Int       @id @default(autoincrement())
+  tokenHash String    @unique @db.VarChar(64)
+  email     String    @db.VarChar(255)
+  expiresAt DateTime
+  usedAt    DateTime?
+  next      String?   @db.VarChar(500)
+  createdAt DateTime  @default(now())
+
+  @@index([email])
+  @@map("patient_magic_links")
+}
+
+model PatientOAuthAccount {
+  id                Int     @id @default(autoincrement())
+  patientId         Int
+  provider          String  @db.VarChar(20)
+  providerAccountId String  @db.VarChar(255)
+  email             String? @db.VarChar(255)
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([patientId])
+  @@map("patient_oauth_accounts")
+}
+
+model FeaturedProfile {
+  id         Int      @id @default(autoincrement())
+  clinicSlug String   @unique @db.VarChar(255)
+  position   Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([position])
+  @@map("featured_profiles")
+}
